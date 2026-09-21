@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
 import {webcrypto} from 'node:crypto';
-const ID='a'.repeat(32),ORIGIN=`chrome-extension://${ID}/`,TOKEN='b'.repeat(43),VERSION='1.2.0';
+const ID='a'.repeat(32),ORIGIN=`chrome-extension://${ID}/`,TOKEN='b'.repeat(43),VERSION='1.2.0',CONTENT_REVISION='2026-09-21.1';
 const ACCOUNT='account-aaaaaaaa',CLIENT='client-aaaaaaaa',C1='conversation-1111',C2='conversation-2222';
 const source=['extension/shared.js','extension/lane-core.js','extension/background.js'].map(p=>fs.readFileSync(new URL('../'+p,import.meta.url),'utf8').replace(/^import .*\n/gm,'').replaceAll('export ','')).join('\n');
 const clone=x=>x===undefined?undefined:structuredClone(x);
@@ -14,13 +14,13 @@ function harness({saved={},session={doubaoSession:'browser-session'},server={}}=
  saved.clientId??=CLIENT;
  const tasks=server.tasks??=[C1,C2].map((c,i)=>({id:`task-0000000${i}`,accountId:ACCOUNT,conversationId:c,message:'测试 '+i,state:'queued',provider:'browser',created:Date.now()+i,text:'',lastSeq:0,submitted:false,lease:'lease-'+i,deadline:Date.now()+120000,checkpoint:{}}));
  const conversations=server.conversations??=Object.fromEntries([C1,C2].map(id=>[id,{id,accountId:ACCOUNT,title:id,upstreamUrl:''}]));
- const counters={creates:[],runs:[],requests:[],events:[],discards:[],reloads:[],alarms:0,scheduled:[]};
+ const counters={creates:[],runs:[],requests:[],events:[],discards:[],reloads:[],injections:[],alarms:0,scheduled:[]};
  const tabs=new Map([[10,{id:10,url:'https://chatgpt.com/c/manual',windowId:1,autoDiscardable:true,active:true}]]),pages=new Map();
  const messages=event(),removed=event();
  const makeStorage=obj=>({get:async keys=>keys===null?clone(obj):Object.fromEntries((Array.isArray(keys)?keys:[keys]).map(k=>[k,clone(obj[k])])),set:async patch=>Object.assign(obj,clone(patch)),remove:async key=>{for(const k of Array.isArray(key)?key:[key])delete obj[k];},setAccessLevel:async()=>{}});
- const chrome={storage:{local:makeStorage(saved),session:makeStorage(session)},runtime:{id:ID,getURL:p=>ORIGIN+p,onMessage:messages,onStartup:event(),onInstalled:event()},alarms:{get:async()=>null,create:async()=>{counters.alarms++;},onAlarm:event()},action:{onClicked:event(),setBadgeText:async()=>{}},windows:{update:async()=>{}},scripting:{executeScript:async()=>{}},tabs:{onUpdated:event(),onRemoved:removed,
+ const chrome={storage:{local:makeStorage(saved),session:makeStorage(session)},runtime:{id:ID,getURL:p=>ORIGIN+p,onMessage:messages,onStartup:event(),onInstalled:event()},alarms:{get:async()=>null,create:async()=>{counters.alarms++;},onAlarm:event()},action:{onClicked:event(),setBadgeText:async()=>{}},windows:{update:async()=>{}},scripting:{executeScript:async({target})=>{counters.injections.push(target.tabId);const page=pages.get(target.tabId);if(page){page.version=VERSION;page.revision=CONTENT_REVISION;}}},tabs:{onUpdated:event(),onRemoved:removed,
   get:async id=>{if(!tabs.has(id))throw Error('missing tab');return clone(tabs.get(id));},
-  create:async({url,active})=>{const id=Math.max(...tabs.keys())+1,tab={id,url,active,windowId:1,autoDiscardable:true};tabs.set(id,tab);pages.set(id,{ok:true,version:VERSION,composer:true,busy:false,hasDraft:false,activeTask:null,documentKey:'doc-'+id,href:url,userCount:url.includes('/c/')?1:0,detail:'fixture ready'});counters.creates.push(id);return clone(tab);},
+  create:async({url,active})=>{const id=Math.max(...tabs.keys())+1,tab={id,url,active,windowId:1,autoDiscardable:true};tabs.set(id,tab);pages.set(id,{ok:true,version:VERSION,revision:CONTENT_REVISION,composer:true,busy:false,hasDraft:false,activeTask:null,documentKey:'doc-'+id,href:url,userCount:url.includes('/c/')?1:0,detail:'fixture ready'});counters.creates.push(id);return clone(tab);},
   reload:async id=>{if(!tabs.has(id))throw Error('missing');tabs.get(id).discarded=false;counters.reloads.push(id);return clone(tabs.get(id));},
   remove:async id=>{tabs.delete(id);pages.delete(id);},
   update:async(id,patch)=>{if(!tabs.has(id))throw Error('missing');Object.assign(tabs.get(id),patch);if(patch.url&&pages.has(id)){const page=pages.get(id);page.href=patch.url;page.userCount=patch.url.includes('/c/')?1:0;page.documentKey='doc-'+id+'-'+counters.requests.length;}if('autoDiscardable'in patch)counters.discards.push([id,patch.autoDiscardable]);return clone(tabs.get(id));},
@@ -56,6 +56,11 @@ test('one account serializes conversations through one work tab and never adopts
  const h=harness();await h.cycle();assert.equal(h.counters.runs.length,1);
  const a=h.saved['lane:'+C1];assert.equal(h.saved['lane:'+C2],undefined);assert.notEqual(a.bridge.tabId,10);assert.equal(h.counters.creates.length,1);
  h.tasks[0].state='completed';await h.cycle();await h.cycle();const b=h.saved['lane:'+C2];assert.equal(h.counters.runs.length,2);assert.equal(b.bridge.tabId,a.bridge.tabId);assert.equal(h.counters.creates.length,1);
+});
+test('stale same-version content script is reinjected before claiming queued work',async()=>{
+ const saved={accountWorkTab:{accountId:ACCOUNT,tabId:10,currentConversationId:''}},h=harness({saved});
+ h.tabs.get(10).url='https://chatgpt.com/';h.pages.set(10,{ok:true,version:VERSION,revision:'old-revision',composer:true,busy:false,hasDraft:false,activeTask:null,documentKey:'old-doc',href:'https://chatgpt.com/',userCount:0,detail:'stale fixture'});
+ await h.cycle();assert.deepEqual(h.counters.injections,[10]);assert.equal(h.counters.runs.length,1);assert.equal(h.counters.runs[0].packet.task.conversationId,C1);
 });
 test('selected model is delivered unchanged to the bound ChatGPT page',async()=>{
  const h=harness();h.tasks[0].model='gpt-5-6-thinking-extended';await h.cycle();const run=h.counters.runs.find(x=>x.packet.task.conversationId===C1);assert.equal(run.packet.task.model,'gpt-5-6-thinking-extended');

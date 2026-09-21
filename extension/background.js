@@ -1,6 +1,7 @@
 import {DEFAULT_URL,VERSION,TERMINAL,normalizeBaseUrl,apiRequest} from './shared.js';
 import {chatUrl,conversationUrl,validId,assertTask,assertPacket,planTaskIds} from './lane-core.js';
 const storage=chrome.storage.local, PREFIX='lane:', ACCOUNT_TAB='accountWorkTab', ALARM='doubao-multi-recover';
+const CONTENT_REVISION='2026-09-21.1';
 const get=async key=>(await storage.get(key))[key];
 const write=value=>storage.set(value);
 const locks=new Map();
@@ -43,15 +44,22 @@ function kick(delay=0){if(cyclePromise){if(delay===0)rerun=true;return;}clearTim
 const pause=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 async function ping(tabId){let timeout;try{return await Promise.race([chrome.tabs.sendMessage(tabId,{type:'jsc-ping'}),new Promise((_,reject)=>{timeout=setTimeout(()=>reject(new Error('页面响应超时')),3000);})]);}catch{return null;}finally{clearTimeout(timeout);}}
 async function ensureContent(tabId,waitMs=60_000){
-  const deadline=Date.now()+waitMs;let tab,lastInfo,reloaded=false;
+  const deadline=Date.now()+waitMs;let tab,lastInfo,reloaded=false,injectionFailures=0;
   while(Date.now()<deadline){
     tab=await chrome.tabs.get(tabId);
     if(tab.discarded&&!reloaded){await chrome.tabs.reload(tabId).catch(()=>{});reloaded=true;continue;}
     const url=tab.url||tab.pendingUrl||'';
     if(chatUrl(url)){
       let info=await ping(tabId);
-      if(!info||info.version!==VERSION){await chrome.scripting.executeScript({target:{tabId},files:['bridge-core.js','content.js'],injectImmediately:true}).catch(()=>{});info=await ping(tabId);}
-      if(info?.ok&&info.version===VERSION){lastInfo=info;if(info.composer)return {tab,info};}
+      if(!info||info.version!==VERSION||info.revision!==CONTENT_REVISION){
+        const injected=await chrome.scripting.executeScript({target:{tabId},files:['bridge-core.js','content.js'],injectImmediately:true}).then(()=>true).catch(()=>false);
+        info=await ping(tabId);if(!injected||!info)injectionFailures++;
+        // Reloading an unpacked extension invalidates the old isolated world.
+        // If direct reinjection cannot repair it, refresh the existing work tab
+        // once so the manifest content scripts attach to the new extension world.
+        if(!info&&!reloaded&&injectionFailures>=2){await chrome.tabs.reload(tabId).catch(()=>{});reloaded=true;await pause(500);continue;}
+      }
+      if(info?.ok&&info.version===VERSION&&info.revision===CONTENT_REVISION){lastInfo=info;if(info.composer)return {tab,info};}
     }else if(tab.status==='complete'&&url&&!/^(edge|chrome):\/\/newtab/.test(url))throw new Error('工作标签页没有进入 ChatGPT，请检查登录或站点权限');
     await pause(250);
   }
@@ -153,7 +161,8 @@ async function workLane(id,summary,enabled){
       lane.detail='本会话正在独立生成';lane.ready=true;await saveLane(lane);
     }catch(error){
       lane=await loadLane(id);
-      if(lane){lane.detail=error.message||String(error);lane.ready=false;await saveLane(lane);}
+      if(!lane){const config=await settings();lane={conversationId:id,accountId:config.accountId,bridge:null,active:null,detail:'',ready:false};}
+      lane.detail=error.message||String(error);lane.ready=false;await saveLane(lane);
       // Isolate a broken lane: other accounts/conversations continue. No silent resend.
       if(error.status===401||error.status===403)throw error;
     }
@@ -176,9 +185,10 @@ async function runCycle(){
       // different local conversations therefore run serially in that tab.
       const ids=planTaskIds(config.enabled?tasks:[],active,1);
       await Promise.all(ids.map(id=>workLane(id,tasks.find(t=>t.conversationId===id&&!TERMINAL.has(t.state)),config.enabled)));
-      const updated=(await allLanes()).filter(l=>l.accountId===config.accountId),count=updated.filter(l=>l.active).length;
-      await request('/api/bridge/heartbeat',{method:'POST',body:{clientId:await get('clientId'),ready:config.enabled,activeCount:count,detail:config.enabled?'账号桥接在线；同一账号复用一个工作标签页':'已暂停领取新任务'}});
-      await setStatus({backend:'online',ready:config.enabled,activeCount:count,accountId:config.accountId,detail:config.enabled?'账号桥接在线':'已暂停接单'});failures=0;
+      const updated=(await allLanes()).filter(l=>l.accountId===config.accountId),count=updated.filter(l=>l.active).length,waiting=tasks.some(t=>!TERMINAL.has(t.state)),blocked=updated.find(l=>waiting&&!l.active&&l.ready===false&&l.detail);
+      const ready=config.enabled&&!blocked,detail=!config.enabled?'已暂停领取新任务':blocked?.detail||'账号桥接在线；同一账号复用一个工作标签页';
+      await request('/api/bridge/heartbeat',{method:'POST',body:{clientId:await get('clientId'),ready,activeCount:count,detail}});
+      await setStatus({backend:'online',ready,activeCount:count,accountId:config.accountId,detail});failures=0;
       if(!count&&!tasks.some(t=>!TERMINAL.has(t.state)))delay=12000;
     }catch(error){failures++;delay=Math.min(30000,1000*2**Math.min(5,failures));await setStatus({backend:error.status===401?'unpaired':'offline',ready:false,detail:error.message||String(error)}).catch(()=>{});}
     finally{cyclePromise=null;const next=rerun?0:delay;rerun=false;kick(next);}

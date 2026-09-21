@@ -1,6 +1,7 @@
 /* DOM adapter only. No cookies, browser session extraction, private ChatGPT APIs or remote code. */
 (() => {
   const VERSION='1.2.0';
+  const CONTENT_REVISION='2026-09-21.1';
   const documentKey=crypto.randomUUID();
   function conversationUrl(raw){try{const u=new URL(raw);return u.protocol==='https:'&&['chatgpt.com','chat.openai.com'].includes(u.hostname)&&/^\/(?:g\/[A-Za-z0-9_-]+\/)?c\/(?:WEB:)?[A-Za-z0-9_-]+$/.test(u.pathname)?'https://chatgpt.com'+u.pathname:'';}catch{return '';}}
   // Re-injection repairs this isolated world without reloading the ChatGPT page.
@@ -310,7 +311,7 @@
   function onMessage(packet,sender,respond) {
     if(disposed)return;
     if(packet?.type==='jsc-ping'){
-      respond({ok:true,version:VERSION,documentKey,href:location.href,userCount:users().length,composer:!!composer(),busy:!!stopButton(),hasDraft:!!core.normalize(composerText(composer() || {})),activeTask:active?.task.id || null,detail:composer()?'ChatGPT 页面已连接': 'ChatGPT 输入框未就绪，请登录或进入聊天页面'});return;
+      respond({ok:true,version:VERSION,revision:CONTENT_REVISION,documentKey,href:location.href,userCount:users().length,composer:!!composer(),busy:!!stopButton(),hasDraft:!!core.normalize(composerText(composer() || {})),activeTask:active?.task.id || null,detail:composer()?'ChatGPT 页面已连接': 'ChatGPT 输入框未就绪，请登录或进入聊天页面'});return;
     }
     if(packet?.type==='jsc-run'){
       if(packet.documentKey!==documentKey||!packet.task?.accountId||!packet.task?.conversationId||!packet.task?.id||typeof packet.task.message!=='string'||!['','gpt-5-6','gpt-5-6-thinking','gpt-5-6-thinking-standard','gpt-5-6-thinking-extended','gpt-5-6-thinking-max','gpt-5-6-pro','gpt-6-pro'].includes(packet.task.model||'')){respond({ok:false,error:'无效任务'});return;}
