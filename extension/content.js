@@ -46,9 +46,44 @@
     return Array.from(document.querySelectorAll('[data-message-author-role="assistant"]')).filter(node=>
       !!(userNode.compareDocumentPosition(node)&Node.DOCUMENT_POSITION_FOLLOWING));
   }
+  const mdEscape=text=>String(text||'').replace(/([\\`*_[\]])/g,'\\$1');
+  function texOf(node){return node?.querySelector?.('annotation[encoding="application/x-tex"]')?.textContent?.trim()||'';}
+  function inlineMarkdown(node){
+    if(node.nodeType===Node.TEXT_NODE)return mdEscape(node.nodeValue);
+    if(node.nodeType!==Node.ELEMENT_NODE)return '';
+    const tag=node.tagName.toLowerCase(),body=()=>Array.from(node.childNodes).map(inlineMarkdown).join('');
+    if(node.matches('.katex,.katex-display')){const tex=texOf(node);if(tex)return node.matches('.katex-display')?`\n\\[${tex}\\]\n`:`\\(${tex}\\)`;}
+    if(tag==='strong'||tag==='b')return `**${body()}**`;
+    if(tag==='em'||tag==='i')return `*${body()}*`;
+    if(tag==='code'&&node.parentElement?.tagName!=='PRE')return '`'+node.textContent.replace(/`/g,'\\`')+'`';
+    if(tag==='br')return '\n';
+    if(tag==='a'){const href=node.getAttribute('href')||'';try{const u=new URL(href,location.href);if(['http:','https:'].includes(u.protocol))return `[${body()}](${u.href})`;}catch{}return body();}
+    return body();
+  }
+  function blockMarkdown(root){
+    const out=[];
+    function add(value){value=String(value||'').trim();if(value)out.push(value);}
+    function visit(node){
+      if(node.nodeType===Node.TEXT_NODE){add(node.nodeValue);return;}
+      if(node.nodeType!==Node.ELEMENT_NODE)return;
+      const tag=node.tagName.toLowerCase(),tex=texOf(node);
+      if((node.matches('.katex-display')||tag==='math')&&tex){add(`\\[${tex}\\]`);return;}
+      if(/^h[1-6]$/.test(tag)){add('#'.repeat(Number(tag[1]))+' '+inlineMarkdown(node));return;}
+      if(tag==='p'){add(inlineMarkdown(node));return;}
+      if(tag==='pre'){add('```\n'+node.textContent.replace(/\n$/,'')+'\n```');return;}
+      if(tag==='ul'||tag==='ol'){let n=1;for(const li of node.children)if(li.tagName==='LI')add((tag==='ol'?n+++'. ':'- ')+inlineMarkdown(li));return;}
+      if(tag==='blockquote'){add(inlineMarkdown(node).split('\n').map(line=>'> '+line).join('\n'));return;}
+      if(tag==='hr'){add('---');return;}
+      if(tag==='table'){for(const tr of node.querySelectorAll(':scope > thead > tr,:scope > tbody > tr,:scope > tr'))add('| '+Array.from(tr.children).map(cell=>inlineMarkdown(cell).trim()).join(' | ')+' |');return;}
+      const block=/^(div|section|article|main|header|footer|figure|figcaption|dl|dt|dd)$/.test(tag);
+      if(block){for(const child of node.childNodes)visit(child);return;}
+      add(inlineMarkdown(node));
+    }
+    for(const child of root.childNodes)visit(child);return out.join('\n\n').replace(/\n{3,}/g,'\n\n').trim();
+  }
   function answerText(node) {
     const markdown=Array.from(node.querySelectorAll('.markdown')).filter(n=>!n.parentElement?.closest('.markdown'));
-    return (markdown.length?markdown.map(elementText).join('\n\n'):elementText(node)).trim();
+    return (markdown.length?markdown.map(blockMarkdown).join('\n\n'):elementText(node)).trim();
   }
   function generatedImageSource(src){
     try{
