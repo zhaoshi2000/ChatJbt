@@ -43,9 +43,30 @@
     const markdown=Array.from(node.querySelectorAll('.markdown')).filter(n=>!n.parentElement?.closest('.markdown'));
     return (markdown.length?markdown.map(elementText).join('\n\n'):elementText(node)).trim();
   }
-  function answerImages(node){
-    if(!node)return [];
-    const seen=new Set();return Array.from(node.querySelectorAll('img')).filter(img=>{const src=img.currentSrc||img.src;if(!src||seen.has(src)||!img.complete||img.naturalWidth<128||img.naturalHeight<128)return false;seen.add(src);return true;});
+  function generatedImageSource(src){
+    try{
+      const url=new URL(src,location.href);
+      return url.protocol==='blob:'||url.protocol==='data:'||(url.hostname==='chatgpt.com'&&url.pathname==='/backend-api/estuary/content')||url.hostname==='oaidalleapiprodscus.blob.core.windows.net'||url.hostname.endsWith('.oaiusercontent.com');
+    }catch{return false;}
+  }
+  function answerImages(node,userNode){
+    if(!userNode)return [];
+    const nextUser=Array.from(document.querySelectorAll('[data-message-author-role="user"]')).find(candidate=>candidate!==userNode&&!!(userNode.compareDocumentPosition(candidate)&Node.DOCUMENT_POSITION_FOLLOWING));
+    const afterUser=img=>!userNode.contains(img)&&!!(userNode.compareDocumentPosition(img)&Node.DOCUMENT_POSITION_FOLLOWING)&&(!nextUser||!!(img.compareDocumentPosition(nextUser)&Node.DOCUMENT_POSITION_FOLLOWING));
+    const turn=turnOf(node),local=[];
+    if(node)local.push(...node.querySelectorAll('img'));
+    if(turn&&turn!==node)local.push(...turn.querySelectorAll('img'));
+    // Image-generation cards can be siblings of the assistant message node in the
+    // current ChatGPT DOM. Search the current message interval as a fallback, but
+    // only accept known OpenAI media URLs there so sidebar/profile images cannot leak in.
+    const broad=Array.from((document.querySelector('main')||document).querySelectorAll('img')).filter(img=>afterUser(img)&&generatedImageSource(img.currentSrc||img.src));
+    const localSet=new Set(local),seen=new Set();
+    return [...local,...broad].filter(img=>{
+      const src=img.currentSrc||img.src;
+      if(!src||seen.has(src)||!afterUser(img)||!img.complete||img.naturalWidth<128||img.naturalHeight<128)return false;
+      if(!localSet.has(img)&&!generatedImageSource(src))return false;
+      seen.add(src);return true;
+    });
   }
   async function responseImages(nodes){
     const result=[];for(const [index,img] of nodes.slice(0,4).entries()){
@@ -191,8 +212,8 @@
           await emit(job,'checkpoint',{checkpoint:cp});
         }
         const nodes=assistantAfter(list[index].node),newest=nodes.at(-1);
-        const text=nodes.map(answerText).filter(Boolean).join('\n\n'),media=answerImages(newest),mediaKey=media.map(img=>(img.currentSrc||img.src)+':'+img.naturalWidth+'x'+img.naturalHeight).join('|');
-        const progress=pageProgress(newest),now=Date.now();
+        const text=nodes.map(answerText).filter(Boolean).join('\n\n'),media=answerImages(newest,list[index].node),mediaKey=media.map(img=>(img.currentSrc||img.src)+':'+img.naturalWidth+'x'+img.naturalHeight).join('|');
+        const responseNode=media.at(-1)||newest,progress=pageProgress(responseNode),now=Date.now();
         if(text!==lastText){lastText=text;lastChange=now;}
         if(mediaKey!==lastMedia){lastMedia=mediaKey;lastChange=now;}
         if(now-lastPush>=500&&text!==job.lastPushedText){
@@ -202,7 +223,7 @@
         if(progress.detail!==lastDetail||now-lastProgress>12_000){
           await emit(job,'progress',{detail:progress.detail,checkpoint:cp});lastDetail=progress.detail;lastProgress=now;
         }
-        if(core.mayComplete({text,hasMedia:media.length>0,busy:progress.busy,searching:progress.searching,completionAction:completionAction(newest)||media.length>0,stableMs:now-lastChange})){
+        if(core.mayComplete({text,hasMedia:media.length>0,busy:progress.busy,searching:progress.searching,completionAction:completionAction(responseNode)||media.length>0,stableMs:now-lastChange})){
           const images=await responseImages(media);cp.phase='finished';await emit(job,'done',{text,images,checkpoint:cp});return;
         }
         const turn=turnOf(newest);
