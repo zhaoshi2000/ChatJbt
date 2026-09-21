@@ -4,14 +4,15 @@ import {renderMarkdown} from './render.js';
 const $=id=>document.getElementById(id),KEY='doubao.v12.connection';
 const parse=(s,fallback)=>{try{return JSON.parse(s)||fallback;}catch{return fallback;}};
 let saved=parse(localStorage.getItem(KEY),{}),config={backendUrl:location.origin,token:saved.token||'',enabled:saved.enabled!==false};
-let account=null,provider='browser',conversations=[],summaries=[],tasks=[],current=null,epoch=0,refreshing=false,sending=false,mode='chat',toastTimer,attachments=[],openHistoryMenu=null,actionConversationId='';
+let account=null,provider='browser',conversations=[],summaries=[],tasks=[],current=null,epoch=0,refreshing=false,sending=false,mode='chat',toastTimer,attachments=[],openHistoryMenu=null,actionConversationId='',bannerTaskId='';
 let selected=new URL(location.href).searchParams.get('c')||'',createDraftId='';
 const streams=new Map();
 let lastAuth=0,newCredential=null;
 const validId=id=>/^[A-Za-z0-9_-]{8,100}$/.test(id||'');
 const modelLabel=value=>({'gpt-5-6':'6 · 即时','gpt-5-6-thinking':'6 · 中','gpt-5-6-thinking-standard':'6 · 中','gpt-5-6-thinking-extended':'6 · 高','gpt-5-6-thinking-max':'6 · 极高','gpt-5-6-pro':'6 Pro','gpt-6-pro':'6 Pro'}[value]||'当前模型');
 if(!validId(selected))selected='';
-function banner(text){$('banner').textContent=text;$('banner').hidden=!text;}
+function banner(text,taskId=''){bannerTaskId=taskId;$('banner').textContent=text;$('banner').hidden=!text;}
+function clearTaskBanner(taskId){if(taskId&&bannerTaskId===taskId)banner('');}
 function toast(text){$('toast').textContent=text;$('toast').hidden=false;clearTimeout(toastTimer);toastTimer=setTimeout(()=>$('toast').hidden=true,3500);}
 function showDialog(id){$(id).showModal();}
 function result(id,text,error=false){$(id).textContent=text;$(id).classList.toggle('error',error);}
@@ -78,7 +79,7 @@ async function refresh(force=false){
     if(cid){
       const detail=await apiRequest(local,`/api/conversations/${cid}/tasks`);if(e!==epoch||cid!==selected)return;
       if(detail.conversation.accountId!==account.id)throw new Error('会话账号不匹配，拒绝展示');
-      current=detail.conversation;const latest=new Map(tasks.map(t=>[t.id,t]));tasks=detail.tasks.map(t=>latest.get(t.id)?.version>t.version?latest.get(t.id):t).sort((a,b)=>a.created-b.created);renderHeader();renderTasks();
+      current=detail.conversation;const latest=new Map(tasks.map(t=>[t.id,t]));tasks=detail.tasks.map(t=>latest.get(t.id)?.version>t.version?latest.get(t.id):t).sort((a,b)=>a.created-b.created);renderHeader();renderTasks();if(bannerTaskId&&tasks.some(t=>t.id===bannerTaskId&&TERMINAL.has(t.state)))banner('');
       const p=pending(),received=p&&tasks.find(x=>x.requestId===p.requestId);
       if(received){sessionStorage.removeItem(pendingKey());sessionStorage.removeItem(draftKey());if($('input').value===p.message)$('input').value='';updateComposer();}
       const active=activeTask();if(active&&!streams.has(active.id))observe(active,e,local);
@@ -98,7 +99,7 @@ async function refresh(force=false){
 async function observe(task,e,local){
   const controller=new AbortController();streams.set(task.id,controller);let lastActivity=Date.now();const watchdog=setInterval(()=>{if(Date.now()-lastActivity>35000)controller.abort();},5000);
   try{const response=await fetch(local.backendUrl+'/api/tasks/'+task.id+'/events',{headers:{Authorization:'Bearer '+local.token,Accept:'text/event-stream'},signal:controller.signal,credentials:'omit',redirect:'error',cache:'no-store'});if(!response.ok||!response.body)throw new Error('实时订阅暂不可用');
-    for await(const frame of parseSse(response.body,()=>lastActivity=Date.now())){if(e!==epoch||selected!==task.conversationId)break;const snapshot=JSON.parse(frame.data);if(snapshot.accountId!==account?.id||snapshot.conversationId!==selected||snapshot.id!==task.id)throw new Error('拒绝不属于本会话的流式消息');const previous=tasks.find(t=>t.id===snapshot.id);if(!previous||snapshot.version>=previous.version){tasks=tasks.filter(t=>t.id!==snapshot.id).concat(snapshot).sort((a,b)=>a.created-b.created);renderTasks();}if(TERMINAL.has(snapshot.state))break;}
+    for await(const frame of parseSse(response.body,()=>lastActivity=Date.now())){if(e!==epoch||selected!==task.conversationId)break;const snapshot=JSON.parse(frame.data);if(snapshot.accountId!==account?.id||snapshot.conversationId!==selected||snapshot.id!==task.id)throw new Error('拒绝不属于本会话的流式消息');const previous=tasks.find(t=>t.id===snapshot.id);if(!previous||snapshot.version>=previous.version){tasks=tasks.filter(t=>t.id!==snapshot.id).concat(snapshot).sort((a,b)=>a.created-b.created);renderTasks();}if(TERMINAL.has(snapshot.state)){clearTaskBanner(snapshot.id);break;}}
   }catch(error){if(e===epoch&&!controller.signal.aborted)console.warn('Stream will resume from backend snapshot:',error.message);}
   finally{clearInterval(watchdog);if(streams.get(task.id)===controller)streams.delete(task.id);controller.abort();}
 }
@@ -124,7 +125,7 @@ async function send(){
     if(response.accountId!==account.id||response.conversationId!==cid)throw new Error('任务返回的账号或会话不匹配');
     sessionStorage.removeItem(draftKey());if($('input').value.trim()===text||(!$('input').value.trim()&&text==='请查看并分析这张图片。'))$('input').value='';attachments=[];renderAttachments();autosize();
     tasks=tasks.filter(t=>t.id!==response.id).concat(response).sort((a,b)=>a.created-b.created);summaries=[response,...summaries.filter(t=>t.id!==response.id)];renderTasks(true);renderHistory();
-    if(provider==='browser'){banner('任务已提交，正在自动打开并唤醒 ChatGPT 工作页…');webWorker('ui-wake',{accountId:account.id,conversationId:cid}).catch(()=>{});}
+    if(provider==='browser'){banner('任务已提交，正在自动打开并唤醒 ChatGPT 工作页…',response.id);webWorker('ui-wake',{accountId:account.id,conversationId:cid}).catch(()=>{});}
     if(!streams.has(response.id))observe(response,e,{...config});
   }catch(error){
     if(pk&&error.status>=400&&error.status<500&&error.status!==408&&error.status!==429)sessionStorage.removeItem(pk);
