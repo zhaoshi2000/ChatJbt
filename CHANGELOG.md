@@ -1,5 +1,7 @@
 # v1.2.0
 
+- 新增账号 Token 鉴权的 OpenAI 兼容接口：`GET /v1/models` 和 `POST /v1/chat/completions`，支持非流式、SSE 流式及 OpenClaw function tools 转换。
+- 连接设置新增“复制 OpenClaw 配置”，自动填入本机 Base URL、账号专属 Token 和 `gbt/gbt` 模型。
 - 前台与扩展的用户可见品牌名统一改为 GBT，保留旧内部存储键以兼容现有账号和历史。
 - ChatGPT 工作页在后台停止刷新时自动短暂激活并返回原标签页，无需手动点过去。
 - 重新加载扩展时校验并复用原工作标签页，不再每次额外创建 ChatGPT 页面。

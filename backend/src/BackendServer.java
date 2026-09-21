@@ -74,7 +74,7 @@ public final class BackendServer {
             if(path.equals("/health")){
                 require(method,"GET");send(x,200,Json.map("ok",true,"app","java-stream-chat","version",VERSION,"instanceId",instanceId,"port",config.port,"provider",config.provider,"model",config.model,"multiAccount",true));return;
             }
-            if(!path.startsWith("/api/")&&!path.startsWith("/admin/")){require(method,"GET");staticFile(x,path);return;}
+            if(!path.startsWith("/api/")&&!path.startsWith("/admin/")&&!path.startsWith("/v1/")){require(method,"GET");staticFile(x,path);return;}
             if(path.equals("/api/bootstrap-account")){
                 require(method,"POST");
                 String origin=x.getRequestHeaders().getFirst("Origin"),expected="http://127.0.0.1:"+config.port;
@@ -88,6 +88,7 @@ public final class BackendServer {
             var principal=workspaces.authenticate(x.getRequestHeaders().getFirst("Authorization"),token);
             if(principal==null){send(x,401,Json.map("error","令牌无效。首次使用请用 data/local-token.txt 创建账号；已有账号请用该账号专属令牌。"));return;}
             String accountId=principal.admin()?null:principal.accountId();
+            if(path.startsWith("/v1/")){OpenAiCompat.handle(this,x,method,path,principal);return;}
             if(path.equals("/api/me")){
                 require(method,"GET");send(x,200,Json.map("role",principal.admin()?"admin":"account","account",principal.admin()?null:workspaces.accountView(accountId),"version",VERSION,"provider",config.provider,"maxConcurrent",config.concurrent));return;
             }
@@ -323,7 +324,7 @@ public final class BackendServer {
     static void send(HttpExchange x,int code,Object value)throws IOException{
         byte[] b=Json.stringify(value).getBytes(StandardCharsets.UTF_8);x.getResponseHeaders().set("Content-Type","application/json; charset=utf-8");x.sendResponseHeaders(code,b.length);x.getResponseBody().write(b);
     }
-    static void safeError(HttpExchange x,int code,String error){if(x.getResponseCode()!=-1)return;try{send(x,code,Json.map("error",error));}catch(IOException ignored){}}
+    static void safeError(HttpExchange x,int code,String error){if(x.getResponseCode()!=-1)return;try{Object detail=x.getRequestURI().getPath().startsWith("/v1/")?Json.map("message",error,"type",code>=500?"server_error":"invalid_request_error","code",code):error;send(x,code,Json.map("error",detail));}catch(IOException ignored){}}
     static final class MethodError extends RuntimeException{MethodError(String m){super(m);}}
     static final class BodyTooLarge extends RuntimeException{BodyTooLarge(String m){super(m);}}
 }

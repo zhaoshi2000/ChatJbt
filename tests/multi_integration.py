@@ -192,6 +192,40 @@ class IsolationTests(unittest.TestCase):
         _,remote_created=b.create(a,self.c,'生成浏览器文件卡片');_,remote_claimed=b.poll(a,self.c);remote=remote_claimed['task']
         self.assertEqual(b.event(a,remote,1,'done',text='已生成文件：下载 forum.zip',downloads=[{'name':'forum.zip'}])[0],200)
         remote_view=b.call('GET','/api/tasks/'+remote_created['id'],token=a['token'])[1];self.assertEqual(remote_view['downloads'],[{'name':'forum.zip'}])
+    def _check_openai_compatible_token_models_completion_stream_and_tools(self):
+        b=self.b;a=self.a
+        code,models=b.call('GET','/v1/models',token=a['token']);self.assertEqual(code,200);self.assertIn('gbt',[m['id'] for m in models['data']])
+        self.assertEqual(b.call('GET','/v1/models')[0],403)
+        code,error=b.call('POST','/v1/chat/completions',{'model':'missing','messages':[{'role':'user','content':'hello'}]},a['token'])
+        self.assertEqual(code,400);self.assertIn('message',error['error']);self.assertEqual(error['error']['code'],400)
+        b.call('POST','/api/bridge/heartbeat',{'clientId':a['clientId'],'ready':True},a['token'])
+        payload={'model':'gbt','messages':[{'role':'system','content':'concise'},{'role':'user','content':'OpenClaw hello'}]}
+        with cf.ThreadPoolExecutor(max_workers=1) as pool:
+            future=pool.submit(b.call,'POST','/v1/chat/completions',payload,a['token']);task=None
+            for _ in range(40):
+                rows=b.call('GET','/api/tasks',token=a['token'])[1]['tasks'];task=next((t for t in rows if not t['state'] in ('completed','error','cancelled','interrupted')),None)
+                if task:break
+                time.sleep(.05)
+            self.assertIsNotNone(task);_,claimed=b.poll(a,{'id':task['conversationId']});self.assertEqual(b.event(a,claimed['task'],1,'done',text='OpenClaw ok')[0],200)
+            code,result=future.result(timeout=5)
+        self.assertEqual(code,200);self.assertEqual(result['choices'][0]['message']['content'],'OpenClaw ok');self.assertEqual(result['model'],'gbt')
+        tool_payload={'model':'gbt-6-thinking','stream':True,'messages':[{'role':'user','content':'list files'}],'tools':[{'type':'function','function':{'name':'list_files','description':'List files','parameters':{'type':'object','properties':{}}}}]}
+        with cf.ThreadPoolExecutor(max_workers=1) as pool:
+            future=pool.submit(b.raw,'POST','/v1/chat/completions',json.dumps(tool_payload).encode(),a['token'],{'Content-Type':'application/json'});task=None
+            for _ in range(40):
+                rows=b.call('GET','/api/tasks',token=a['token'])[1]['tasks'];task=next((t for t in rows if not t['state'] in ('completed','error','cancelled','interrupted')),None)
+                if task:break
+                time.sleep(.05)
+            self.assertIsNotNone(task);_,claimed=b.poll(a,{'id':task['conversationId']});self.assertEqual(claimed['task']['model'],'gpt-5-6-thinking-standard')
+            self.assertEqual(b.event(a,claimed['task'],1,'done',text='{"tool_calls":[{"name":"list_files","arguments":{"path":"."}}]}')[0],200);code,raw,_=future.result(timeout=5)
+        self.assertEqual(code,200);text=raw.decode();self.assertIn('"finish_reason":"tool_calls"',text);self.assertIn('"name":"list_files"',text);self.assertTrue(text.rstrip().endswith('data: [DONE]'))
+class OpenAiCompatTests(unittest.TestCase):
+    def test_token_models_completion_stream_and_tools(self):
+        b=Backend()
+        try:
+            self.b=b;self.a=b.account('OpenClaw');b.register(self.a)
+            IsolationTests._check_openai_compatible_token_models_completion_stream_and_tools(self)
+        finally:b.cleanup()
 class ConversationPinTests(unittest.TestCase):
     def test_pin_is_scoped_persisted_and_sorted_first(self):
         b=Backend()
