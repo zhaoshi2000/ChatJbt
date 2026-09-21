@@ -10,10 +10,10 @@ final class TaskStore {
     static final Set<String> TERMINAL=Set.of("completed","error","cancelled","interrupted");
     final Config config;
     private final LinkedHashMap<String,Task> tasks=new LinkedHashMap<>();
-    private final Path dir;
+    private final Path dir,fileDir;
     private String persistenceError="";
     TaskStore(Config config) throws IOException {
-        this.config=config;dir=config.data.resolve("tasks");Files.createDirectories(dir);
+        this.config=config;dir=config.data.resolve("tasks");fileDir=config.data.resolve("files");Files.createDirectories(dir);Files.createDirectories(fileDir);
         try(var files=Files.list(dir)){
             for(Path f:files.filter(p->p.toString().endsWith(".json")).sorted().toList()){
                 try{
@@ -40,7 +40,7 @@ final class TaskStore {
         final List<Map<String,Object>> attachments;
         final long created;
         String state="queued", text="", detail="已排队", owner="", lease="";
-        List<Map<String,Object>> images=new ArrayList<>();
+        List<Map<String,Object>> images=new ArrayList<>(),files=new ArrayList<>();
         long version=1, updated, started, deadline, lastSeq, leaseUntil, lastSaved;
         boolean submitted=false;
         Map<String,Object> checkpoint=new LinkedHashMap<>();
@@ -56,6 +56,7 @@ final class TaskStore {
             id=Json.str(m,"id","");requestId=Json.str(m,"requestId",id);message=Json.str(m,"message","");model=Json.str(m,"model","");provider=Json.str(m,"provider","browser");
             attachments=m.get("attachments") instanceof List<?> list?list.stream().filter(Map.class::isInstance).map(v->(Map<String,Object>)new LinkedHashMap<>((Map<String,Object>)v)).toList():List.of();
             if(m.get("images") instanceof List<?> list)images=list.stream().filter(Map.class::isInstance).map(v->(Map<String,Object>)new LinkedHashMap<>((Map<String,Object>)v)).toList();
+            if(m.get("files") instanceof List<?> list)files=new ArrayList<>(list.stream().filter(Map.class::isInstance).map(v->(Map<String,Object>)new LinkedHashMap<>((Map<String,Object>)v)).toList());
             created=Json.num(m,"created",System.currentTimeMillis());updated=Json.num(m,"updated",created);started=Json.num(m,"started",0);deadline=Json.num(m,"deadline",0);
             state=Json.str(m,"state","error");text=Json.str(m,"text","");detail=Json.str(m,"detail","");version=Json.num(m,"version",1);
             owner=Json.str(m,"owner","");lease=Json.str(m,"lease","");lastSeq=Json.num(m,"lastSeq",0);leaseUntil=Json.num(m,"leaseUntil",0);submitted=Json.bool(m,"submitted",false);
@@ -63,8 +64,8 @@ final class TaskStore {
             if(accountId.equals("legacy-archive")&&!terminal()){state="interrupted";detail="旧版记录已只读归档；不自动续跑到任何新账号";version++;}
         }
         boolean terminal(){return TERMINAL.contains(state);}
-        Map<String,Object> view(){return Json.map("id",id,"accountId",accountId,"conversationId",conversationId,"requestId",requestId,"message",message,"model",model,"attachments",attachments,"images",images,"provider",provider,"created",created,"updated",updated,"started",started,"deadline",deadline,"state",state,"text",text,"detail",detail,"version",version,"submitted",submitted);}
-        Map<String,Object> disk(){var m=view();m.putAll(Json.map("owner",owner,"lease",lease,"leaseUntil",leaseUntil,"lastSeq",lastSeq,"checkpoint",checkpoint));return m;}
+        Map<String,Object> view(){return Json.map("id",id,"accountId",accountId,"conversationId",conversationId,"requestId",requestId,"message",message,"model",model,"attachments",attachments,"images",images,"files",files.stream().map(f->Json.map("id",Json.str(f,"id",""),"name",Json.str(f,"name","文件"),"mimeType",Json.str(f,"mimeType","application/octet-stream"),"size",Json.num(f,"size",0))).toList(),"provider",provider,"created",created,"updated",updated,"started",started,"deadline",deadline,"state",state,"text",text,"detail",detail,"version",version,"submitted",submitted);}
+        Map<String,Object> disk(){var m=view();m.putAll(Json.map("owner",owner,"lease",lease,"leaseUntil",leaseUntil,"lastSeq",lastSeq,"checkpoint",checkpoint,"files",files));return m;}
         Map<String,Object> delivery(){var m=view();m.putAll(Json.map("lease",lease,"lastSeq",lastSeq,"checkpoint",new LinkedHashMap<>(checkpoint)));return m;}
     }
     synchronized Task create(String requestId,String message,String accountId,String conversationId){try{return create(requestId,message,accountId,conversationId,List.of(),"");}catch(IOException e){throw new UncheckedIOException(e);}}
@@ -156,8 +157,18 @@ final class TaskStore {
     }
     synchronized void delete(String id) throws IOException {
         Task t=task(id);if(!t.terminal())throw new Conflict("运行中的任务不能删除，请先取消");
-        Files.deleteIfExists(dir.resolve(t.id+".json"));tasks.remove(id);notifyAll();
+        Files.deleteIfExists(dir.resolve(t.id+".json"));deleteTree(fileDir.resolve(t.id));tasks.remove(id);notifyAll();
     }
+    synchronized Map<String,Object> existingFile(String taskId,String key){return task(taskId).files.stream().filter(f->key.equals(Json.str(f,"key",""))).findFirst().orElse(null);}
+    synchronized Map<String,Object> addFile(String taskId,String lease,String owner,Map<String,Object> file)throws IOException{
+        Task t=task(taskId);if(t.terminal())throw new Conflict("任务已结束，不能继续保存文件");
+        if(!t.lease.equals(lease)||lease.isEmpty()||!t.owner.equals(owner))throw new Conflict("文件上传租约或浏览器所有权不匹配");
+        String key=Json.str(file,"key","");Map<String,Object> existing=existingFile(taskId,key);if(existing!=null)return existing;
+        if(t.files.size()>=4)throw new Conflict("每条回复最多保存 4 个文件");t.files.add(new LinkedHashMap<>(file));changed(t,true);return file;
+    }
+    synchronized Map<String,Object> file(String taskId,String fileId){return task(taskId).files.stream().filter(f->fileId.equals(Json.str(f,"id",""))).findFirst().orElseThrow(()->new Missing("文件不存在"));}
+    Path filePath(String taskId,String fileId){if(!taskId.matches("[A-Za-z0-9_-]{8,80}")||!fileId.matches("[A-Za-z0-9_-]{8,80}"))throw new Missing("文件不存在");return fileDir.resolve(taskId).resolve(fileId+".bin");}
+    static void deleteTree(Path root)throws IOException{if(!Files.exists(root))return;try(var paths=Files.walk(root)){for(Path p:paths.sorted(Comparator.reverseOrder()).toList())Files.deleteIfExists(p);}}
     synchronized int clearHistory(String accountId) throws IOException {
         int n=0;for(Task t:new ArrayList<>(tasks.values()))if(t.terminal()&&(accountId==null||accountId.equals(t.accountId))){delete(t.id);n++;}return n;
     }

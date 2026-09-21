@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
 import {webcrypto} from 'node:crypto';
-const ID='a'.repeat(32),ORIGIN=`chrome-extension://${ID}/`,TOKEN='b'.repeat(43),VERSION='1.2.0',CONTENT_REVISION='2026-09-21.2';
+const ID='a'.repeat(32),ORIGIN=`chrome-extension://${ID}/`,TOKEN='b'.repeat(43),VERSION='1.2.0',CONTENT_REVISION='2026-09-21.4';
 const ACCOUNT='account-aaaaaaaa',CLIENT='client-aaaaaaaa',C1='conversation-1111',C2='conversation-2222';
 const source=['extension/shared.js','extension/lane-core.js','extension/background.js'].map(p=>fs.readFileSync(new URL('../'+p,import.meta.url),'utf8').replace(/^import .*\n/gm,'').replaceAll('export ','')).join('\n');
 const clone=x=>x===undefined?undefined:structuredClone(x);
@@ -14,7 +14,7 @@ function harness({saved={},session={doubaoSession:'browser-session'},server={}}=
  saved.clientId??=CLIENT;
  const tasks=server.tasks??=[C1,C2].map((c,i)=>({id:`task-0000000${i}`,accountId:ACCOUNT,conversationId:c,message:'测试 '+i,state:'queued',provider:'browser',created:Date.now()+i,text:'',lastSeq:0,submitted:false,lease:'lease-'+i,deadline:Date.now()+120000,checkpoint:{}}));
  const conversations=server.conversations??=Object.fromEntries([C1,C2].map(id=>[id,{id,accountId:ACCOUNT,title:id,upstreamUrl:''}]));
- const counters={creates:[],runs:[],requests:[],events:[],discards:[],reloads:[],injections:[],alarms:0,scheduled:[]};
+ const counters={creates:[],runs:[],requests:[],events:[],uploads:[],discards:[],reloads:[],injections:[],alarms:0,scheduled:[]};
  const tabs=new Map([[10,{id:10,url:'https://chatgpt.com/c/manual',windowId:1,autoDiscardable:true,active:true}]]),pages=new Map();
  const messages=event(),removed=event();
  const makeStorage=obj=>({get:async keys=>keys===null?clone(obj):Object.fromEntries((Array.isArray(keys)?keys:[keys]).map(k=>[k,clone(obj[k])])),set:async patch=>Object.assign(obj,clone(patch)),remove:async key=>{for(const k of Array.isArray(key)?key:[key])delete obj[k];},setAccessLevel:async()=>{}});
@@ -26,13 +26,15 @@ function harness({saved={},session={doubaoSession:'browser-session'},server={}}=
   update:async(id,patch)=>{if(!tabs.has(id))throw Error('missing');Object.assign(tabs.get(id),patch);if(patch.url&&pages.has(id)){const page=pages.get(id);page.href=patch.url;page.userCount=patch.url.includes('/c/')?1:0;page.documentKey='doc-'+id+'-'+counters.requests.length;}if('autoDiscardable'in patch)counters.discards.push([id,patch.autoDiscardable]);return clone(tabs.get(id));},
   sendMessage:async(id,packet)=>{if(packet.type==='jsc-ping')return clone(pages.get(id));if(packet.type==='jsc-run')counters.runs.push({id,packet:clone(packet)});return {ok:true};}}};
  const fetch=async(url,options={})=>{
-   const path=new URL(url).pathname,body=options.body?JSON.parse(options.body):{};counters.requests.push({path,body});let value={ok:true},status=200;
+   const parsed=new URL(url),path=parsed.pathname;if(parsed.hostname==='chatgpt.com'&&path==='/backend-api/estuary/content')return new Response(new Uint8Array([80,75,3,4]),{status:200,headers:{'Content-Type':'application/zip'}});
+   const body=typeof options.body==='string'?JSON.parse(options.body):{};counters.requests.push({path,body});let value={ok:true},status=200;
    if(path==='/api/me')value={version:VERSION,role:server.role||'account',account:{id:server.accountId||ACCOUNT,name:'账号 A',clientId:CLIENT},maxConcurrent:3};
    else if(path==='/health')value={version:VERSION};
    else if(path==='/api/tasks')value={tasks:clone([...tasks].reverse())};
    else if(path.startsWith('/api/tasks/'))value=clone(tasks.find(t=>t.id===path.split('/').at(-1)));
    else if(path.startsWith('/api/conversations/'))value=clone(conversations[path.split('/').at(-1)]);
    else if(path==='/api/browser/poll'){const t=tasks.find(t=>t.conversationId===body.conversationId&&!['completed','cancelled','interrupted','error'].includes(t.state));if(t)t.state='running';value={task:clone(t)||null};}
+   else if(path.startsWith('/api/browser/files/')){counters.uploads.push({path,headers:clone(options.headers),size:options.body.size});value={id:'file-aaaaaaaa',name:decodeURIComponent(options.headers['X-Doubao-File-Name']),mimeType:options.headers['Content-Type'],size:options.body.size};status=201;}
    else if(path==='/api/browser/event'){
      const t=tasks.find(t=>t.id===body.id);counters.events.push(clone(body));
      if(server.failEvent){status=503;value={error:'offline'};}
@@ -82,6 +84,10 @@ test('durable outbox replays exactly once after worker restart with same browser
  const p=h.packet(C1,'只保留一次');assert.equal((await h.content(p)).ok,false);assert.equal(h.saved['lane:'+C1].active.pending.seq,1);
  h.server.failEvent=false;const tabs=h.tabs,pages=h.pages;h=harness(options);for(const [k,v]of tabs)h.tabs.set(k,v);for(const [k,v]of pages)h.pages.set(k,v);
  await h.cycle();assert.equal(h.tasks[0].lastSeq,1);assert.equal(h.tasks[0].text,'只保留一次');assert.equal((await h.content(p)).ok,true);assert.equal(h.tasks[0].lastSeq,1);
+});
+test('completed reply downloads a signed ChatGPT artifact into the local backend before ACK',async()=>{
+ const h=harness();await h.cycle();const packet=h.packet(C1,'源码已生成',{eventType:'done',fileSources:[{name:'forum.zip',mimeType:'application/zip',url:'https://chatgpt.com/backend-api/estuary/content?id=signed',key:'/mnt/data/forum.zip'}]});const result=await h.content(packet);
+ assert.equal(result.ok,true);assert.equal(h.counters.uploads.length,1);assert.equal(h.counters.uploads[0].size,4);assert.match(h.counters.uploads[0].path,/\/api\/browser\/files\/task-/);assert.equal(h.tasks[0].state,'completed');
 });
 test('browser restart invalidates persistent numerical tab IDs',async()=>{
  const options={saved:{},session:{doubaoSession:'old'},server:{}};let h=harness(options);await h.cycle();options.session={};h=harness(options);await h.boot;

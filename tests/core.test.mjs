@@ -13,6 +13,14 @@ test('chat input sends on Enter and conversation deletion confirms in place',()=
   assert.doesNotMatch(app,/confirm\(['"]删除/);
 });
 
+test('generated file control downloads through authenticated local storage without page navigation',()=>{
+  const app=fs.readFileSync(new URL('../web/app.js',import.meta.url),'utf8');
+  assert.match(app,/button\.className='generated-file'/);
+  assert.match(app,/fetch\(config\.backendUrl\+'\/api\/tasks\/'/);
+  assert.match(app,/a\.download=file\.name\|\|'生成文件'/);
+  assert.doesNotMatch(app,/window\.open\([^\n]*\/files\//);
+});
+
 test('normalizes IPv4 loopback and localhost without IPv6 ambiguity',()=>{
   assert.equal(normalizeBaseUrl(' http://localhost:48627/ '),'http://127.0.0.1:48627');
   assert.equal(normalizeBaseUrl('http://127.0.0.1:65535'),'http://127.0.0.1:65535');

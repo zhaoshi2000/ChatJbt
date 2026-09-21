@@ -165,9 +165,25 @@ public final class BackendServer {
             if(path.equals("/api/history")){
                 require(method,"DELETE");synchronized(workspaceLock){send(x,200,Json.map("ok",true,"deleted",store.clearHistory(accountId)));}return;
             }
+            if(path.startsWith("/api/browser/files/")){
+                require(method,"POST");WorkspaceStore.requireAccount(principal);String id=path.substring(19);if(!id.matches("[A-Za-z0-9_-]{8,80}"))throw new TaskStore.Missing("任务不存在");
+                var t=scopedTask(principal,id);String client=x.getRequestHeaders().getFirst("X-Doubao-Client"),lease=x.getRequestHeaders().getFirst("X-Doubao-Lease"),key=x.getRequestHeaders().getFirst("X-Doubao-File-Key");
+                workspaces.checkClient(accountId,client==null?"":client);if(!t.owner.equals(client)||!t.lease.equals(lease)||lease==null||lease.isEmpty())throw new TaskStore.Conflict("文件上传租约或浏览器所有权不匹配");
+                if(key==null||!key.matches("[a-f0-9]{64}"))throw new IllegalArgumentException("文件指纹无效");Map<String,Object> existing=store.existingFile(id,key);if(existing!=null){send(x,200,existing);return;}
+                String encoded=x.getRequestHeaders().getFirst("X-Doubao-File-Name"),name;try{name=URLDecoder.decode(encoded==null?"":encoded,StandardCharsets.UTF_8);}catch(Exception e){throw new IllegalArgumentException("文件名编码无效");}
+                name=name.trim();if(name.isEmpty()||name.length()>160||name.contains("/")||name.contains("\\")||name.chars().anyMatch(ch->ch<32))throw new IllegalArgumentException("文件名无效");
+                String mime=Optional.ofNullable(x.getRequestHeaders().getFirst("Content-Type")).orElse("application/octet-stream").split(";",2)[0].trim().toLowerCase(Locale.ROOT);if(!mime.matches("[a-z0-9.+-]+/[a-z0-9.+-]+"))mime="application/octet-stream";
+                String fileId=UUID.randomUUID().toString();Path target=store.filePath(id,fileId);long size=receiveFile(x,target,50_000_000);Map<String,Object> file=Json.map("id",fileId,"name",name,"mimeType",mime,"size",size,"key",key);
+                try{store.addFile(id,lease,client,file);}catch(Exception e){Files.deleteIfExists(target);throw e;}send(x,201,Json.map("id",fileId,"name",name,"mimeType",mime,"size",size));return;
+            }
             if(path.startsWith("/api/tasks/")){
-                String[] p=path.substring(11).split("/",-1);if(p.length>2||!p[0].matches("[A-Za-z0-9_-]{8,80}"))throw new TaskStore.Missing("接口不存在");
+                String[] p=path.substring(11).split("/",-1);if(p.length>3||!p[0].matches("[A-Za-z0-9_-]{8,80}"))throw new TaskStore.Missing("接口不存在");
                 String id=p[0];var t=scopedTask(principal,id);
+                if(p.length==3&&p[1].equals("files")){
+                    require(method,"GET");Map<String,Object> file=store.file(id,p[2]);Path saved=store.filePath(id,p[2]);if(!Files.isRegularFile(saved))throw new TaskStore.Missing("文件不存在或已被清理");
+                    String name=Json.str(file,"name","download.bin"),mime=Json.str(file,"mimeType","application/octet-stream"),quoted=URLEncoder.encode(name,StandardCharsets.UTF_8).replace("+","%20");
+                    x.getResponseHeaders().set("Content-Type",mime);x.getResponseHeaders().set("Content-Disposition","attachment; filename=\"download\"; filename*=UTF-8''"+quoted);x.getResponseHeaders().set("Cache-Control","no-store");x.sendResponseHeaders(200,Files.size(saved));try(InputStream in=Files.newInputStream(saved)){in.transferTo(x.getResponseBody());}return;
+                }
                 if(p.length==1){
                     if(method.equals("DELETE")){synchronized(workspaceLock){store.delete(id);}send(x,200,Json.map("ok",true));return;}
                     require(method,"GET");send(x,200,store.view(id));return;
@@ -256,6 +272,14 @@ public final class BackendServer {
         // Hard cap on UTF-8 wire bytes, independent of Content-Length.
         byte[] b=x.getRequestBody().readNBytes(12_000_001);if(b.length>12_000_000)throw new BodyTooLarge("请求体过大");
         return Json.object(new String(b,StandardCharsets.UTF_8));
+    }
+    static long receiveFile(HttpExchange x,Path target,long max)throws IOException{
+        Files.createDirectories(target.getParent());Path tmp=target.resolveSibling(target.getFileName()+".tmp");long total=0;
+        try(InputStream in=x.getRequestBody();OutputStream out=Files.newOutputStream(tmp,StandardOpenOption.CREATE,StandardOpenOption.TRUNCATE_EXISTING)){
+            byte[] buffer=new byte[64*1024];for(int n;(n=in.read(buffer))>=0;){if(n==0)continue;total+=n;if(total>max)throw new BodyTooLarge("单个生成文件不能超过 50 MB");out.write(buffer,0,n);}
+            if(total==0)throw new IllegalArgumentException("生成文件为空");
+        }catch(RuntimeException|IOException e){Files.deleteIfExists(tmp);throw e;}
+        try{Files.move(tmp,target,StandardCopyOption.REPLACE_EXISTING,StandardCopyOption.ATOMIC_MOVE);}catch(AtomicMoveNotSupportedException e){Files.move(tmp,target,StandardCopyOption.REPLACE_EXISTING);}return total;
     }
     void stream(HttpExchange x,String id)throws Exception{
         if(!streams.tryAcquire()){send(x,429,Json.map("error","订阅过多，请关闭重复窗口"));return;}

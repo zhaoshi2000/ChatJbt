@@ -1,7 +1,7 @@
 import {DEFAULT_URL,VERSION,TERMINAL,normalizeBaseUrl,apiRequest} from './shared.js';
 import {chatUrl,conversationUrl,stableConversationUrl,pageAtTarget,validId,assertTask,assertPacket,planTaskIds} from './lane-core.js';
 const storage=chrome.storage.local, PREFIX='lane:', ACCOUNT_TAB='accountWorkTab', ALARM='doubao-multi-recover';
-const CONTENT_REVISION='2026-09-21.2';
+const CONTENT_REVISION='2026-09-21.4';
 const get=async key=>(await storage.get(key))[key];
 const write=value=>storage.set(value);
 const locks=new Map();
@@ -39,6 +39,15 @@ async function readImage(url){
   const response=await fetch(u.href,{cache:'no-store',credentials:'omit'});if(!response.ok)throw new Error('读取图片失败：HTTP '+response.status);const blob=await response.blob();if(!blob.size||blob.size>6_000_000)throw new Error('生成图片超过 6 MB');
   const bytes=new Uint8Array(await blob.arrayBuffer());let binary='';for(let i=0;i<bytes.length;i+=0x8000)binary+=String.fromCharCode(...bytes.subarray(i,i+0x8000));
   return {ok:true,mimeType:['image/png','image/jpeg','image/webp','image/gif'].includes(blob.type)?blob.type:'image/png',base64:btoa(binary)};
+}
+async function uploadGeneratedFile(task,source){
+  if(!source||typeof source.name!=='string'||typeof source.url!=='string'||typeof source.key!=='string'||source.name.length>160)throw new Error('生成文件信息无效');
+  const remote=new URL(source.url);if(remote.protocol!=='https:'||remote.hostname!=='chatgpt.com'||remote.pathname!=='/backend-api/estuary/content')throw new Error('生成文件地址不安全');
+  const response=await fetch(remote.href,{cache:'no-store',credentials:'omit'});if(!response.ok)throw new Error('下载 ChatGPT 生成文件失败：HTTP '+response.status);
+  const blob=await response.blob();if(!blob.size)throw new Error('ChatGPT 返回了空文件');if(blob.size>50_000_000)throw new Error('生成文件超过 50 MB，未自动保存');
+  const config=await settings(),clientId=await get('clientId'),hash=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(source.key)))).map(v=>v.toString(16).padStart(2,'0')).join('');
+  const saved=await fetch(config.backendUrl+'/api/browser/files/'+encodeURIComponent(task.id),{method:'POST',headers:{Authorization:'Bearer '+config.token,'Content-Type':blob.type||source.mimeType||'application/octet-stream','X-Doubao-Client':clientId,'X-Doubao-Lease':task.lease,'X-Doubao-File-Key':hash,'X-Doubao-File-Name':encodeURIComponent(source.name)},body:blob,credentials:'omit',redirect:'error'});
+  const data=await saved.json().catch(()=>({}));if(!saved.ok)throw Object.assign(new Error(data.error||'服务端保存生成文件失败：HTTP '+saved.status),{status:saved.status});return data;
 }
 function kick(delay=0){if(cyclePromise){if(delay===0)rerun=true;return;}clearTimeout(timer);timer=setTimeout(()=>runCycle().catch(()=>{}),delay);}
 const pause=ms=>new Promise(resolve=>setTimeout(resolve,ms));
@@ -128,6 +137,7 @@ async function forwardEvent(packet,sender){
     lane=await flush(lane);const a=lane.active;
     if(a.lastAck===packet.eventId||TERMINAL.has(a.task.state))return {ok:true,state:a.task.state,terminal:TERMINAL.has(a.task.state)};
     if(!['checkpoint','submitting','snapshot','progress','done','error','interrupted'].includes(packet.eventType)||typeof packet.eventId!=='string'||packet.eventId.length>100)throw new Error('无效事件类型');
+    if(packet.fileSources!==undefined){if(packet.eventType!=='done'||!Array.isArray(packet.fileSources)||packet.fileSources.length>4)throw new Error('生成文件回传无效');for(const source of packet.fileSources)await uploadGeneratedFile(a.task,source);}
     a.checkpoint={...a.checkpoint,...packet.checkpoint};
     a.pending={id:a.task.id,accountId:lane.accountId,conversationId:lane.conversationId,clientId:await get('clientId'),lease:a.task.lease,seq:a.seq+1,eventId:packet.eventId,type:packet.eventType,checkpoint:a.checkpoint};
     if(typeof packet.text==='string')a.pending.text=packet.text.slice(0,1_000_000);

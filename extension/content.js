@@ -1,7 +1,7 @@
 /* DOM adapter only. No cookies, browser session extraction, private ChatGPT APIs or remote code. */
 (() => {
   const VERSION='1.2.0';
-  const CONTENT_REVISION='2026-09-21.2';
+  const CONTENT_REVISION='2026-09-21.4';
   const documentKey=crypto.randomUUID();
   function conversationUrl(raw){try{const u=new URL(raw);return u.protocol==='https:'&&['chatgpt.com','chat.openai.com'].includes(u.hostname)&&/^\/(?:g\/[A-Za-z0-9_-]+\/)?c\/(?:WEB:)?[A-Za-z0-9_-]+$/.test(u.pathname)?'https://chatgpt.com'+u.pathname:'';}catch{return '';}}
   function stableConversationUrl(raw){const url=conversationUrl(raw);return url&&!/\/c\/WEB:/.test(url)?url:'';}
@@ -111,6 +111,27 @@
       if(!localSet.has(img)&&!generatedImageSource(src))return false;
       seen.add(src);return true;
     });
+  }
+  function answerFileLinks(node,userNode){
+    if(!node||!userNode)return [];
+    const nextUser=Array.from(document.querySelectorAll('[data-message-author-role="user"]')).find(candidate=>candidate!==userNode&&!!(userNode.compareDocumentPosition(candidate)&Node.DOCUMENT_POSITION_FOLLOWING));
+    const inTurn=link=>!userNode.contains(link)&&!!(userNode.compareDocumentPosition(link)&Node.DOCUMENT_POSITION_FOLLOWING)&&(!nextUser||!!(link.compareDocumentPosition(nextUser)&Node.DOCUMENT_POSITION_FOLLOWING));
+    const turn=turnOf(node),candidates=[...node.querySelectorAll('a'),...(turn&&turn!==node?turn.querySelectorAll('a'):[])],seen=new Set();
+    return candidates.filter(link=>{const href=link.getAttribute('href')||'';if(!inTurn(link)||seen.has(href)||!(/^(?:sandbox:)?\/mnt\/data\//.test(href)||/\/backend-api\/(?:conversation\/[^/]+\/interpreter\/download|estuary\/content)/.test(href)))return false;seen.add(href);return true;});
+  }
+  async function responseFiles(links,node){
+    const result=[],conversation=location.pathname.match(/\/c\/([^/]+)$/)?.[1]||'';
+    for(const link of links.slice(0,4)){
+      const raw=link.getAttribute('href')||'';let url='',name='',mimeType='application/octet-stream',key=raw;
+      if(/^(?:sandbox:)?\/mnt\/data\//.test(raw)){
+        const sandboxPath=raw.replace(/^sandbox:/,'');const messageNode=link.closest('[data-message-id]')||node?.closest?.('[data-message-id]')||node;const messageId=messageNode?.getAttribute?.('data-message-id')||messageNode?.querySelector?.('[data-message-id]')?.getAttribute('data-message-id');
+        if(!conversation||!messageId)continue;
+        const endpoint='/backend-api/conversation/'+encodeURIComponent(conversation)+'/interpreter/download?message_id='+encodeURIComponent(messageId)+'&sandbox_path='+encodeURIComponent(sandboxPath)+'&download_intent=true';
+        const response=await fetch(endpoint,{credentials:'include',cache:'no-store'});if(!response.ok)throw new Error('获取生成文件下载地址失败：HTTP '+response.status);const data=await response.json();url=data.download_url||'';name=data.file_name||sandboxPath.split('/').pop()||'生成文件';mimeType=data.mime_type||mimeType;key=sandboxPath;
+      }else{const parsed=new URL(raw,location.href);url=parsed.href;name=parsed.searchParams.get('fn')||elementText(link).trim()||'生成文件';key=parsed.pathname+':'+name;}
+      const parsed=new URL(url,location.href);if(parsed.protocol!=='https:'||parsed.hostname!=='chatgpt.com'||parsed.pathname!=='/backend-api/estuary/content')throw new Error('生成文件下载地址不安全，已拒绝保存');
+      result.push({name:name.slice(0,160).replace(/[\\/]/g,'_'),mimeType,url:parsed.href,key});
+    }return result;
   }
   async function responseImages(nodes){
     const result=[];for(const [index,img] of nodes.slice(0,4).entries()){
@@ -282,7 +303,7 @@
           await emit(job,'checkpoint',{checkpoint:cp});
         }
         const nodes=assistantAfter(list[index].node),newest=nodes.at(-1);
-        const text=nodes.map(answerText).filter(Boolean).join('\n\n'),media=answerImages(newest,list[index].node),mediaKey=media.map(img=>(img.currentSrc||img.src)+':'+img.naturalWidth+'x'+img.naturalHeight).join('|');
+        const text=nodes.map(answerText).filter(Boolean).join('\n\n'),media=answerImages(newest,list[index].node),fileLinks=answerFileLinks(newest,list[index].node),mediaKey=[...media.map(img=>(img.currentSrc||img.src)+':'+img.naturalWidth+'x'+img.naturalHeight),...fileLinks.map(link=>link.getAttribute('href')||'')].join('|');
         const responseNode=media.at(-1)||newest,progress=pageProgress(responseNode),now=Date.now();
         if(text!==lastText){lastText=text;lastChange=now;}
         if(mediaKey!==lastMedia){lastMedia=mediaKey;lastChange=now;}
@@ -293,8 +314,8 @@
         if(progress.detail!==lastDetail||now-lastProgress>12_000){
           await emit(job,'progress',{detail:progress.detail,checkpoint:cp});lastDetail=progress.detail;lastProgress=now;
         }
-        if(core.mayComplete({text,hasMedia:media.length>0,busy:progress.busy,searching:progress.searching,completionAction:completionAction(responseNode)||media.length>0,stableMs:now-lastChange})){
-          const images=await responseImages(media);cp.phase='finished';await emit(job,'done',{text,images,checkpoint:cp});return;
+        if(core.mayComplete({text,hasMedia:media.length>0||fileLinks.length>0,busy:progress.busy,searching:progress.searching,completionAction:completionAction(responseNode)||media.length>0||fileLinks.length>0,stableMs:now-lastChange})){
+          const images=await responseImages(media),fileSources=await responseFiles(fileLinks,newest);cp.phase='finished';await emit(job,'done',{text,images,fileSources,checkpoint:cp});return;
         }
         const turn=turnOf(newest);
         const error=Array.from(turn?.querySelectorAll('[role="alert"]') || []).filter(visible).map(elementText).join(' ');

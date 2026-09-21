@@ -1,6 +1,6 @@
 """Real Java HTTP integration; simulated bridge clients, NOT real ChatGPT accounts."""
 import concurrent.futures as cf
-import http.client,json,os,pathlib,socket,subprocess,tempfile,time,unittest,uuid
+import http.client,json,os,pathlib,socket,subprocess,tempfile,time,unittest,uuid,urllib.parse
 ROOT=pathlib.Path(__file__).resolve().parents[1]
 class Backend:
     def __init__(self,provider='browser',extra=None,data=None):
@@ -28,6 +28,8 @@ class Backend:
         try:value=json.loads(raw)
         except:value=raw.decode(errors='replace')
         return code,value
+    def raw(self,method,path,data=b'',token=None,headers=None):
+        c=http.client.HTTPConnection('127.0.0.1',self.port,timeout=8);h={'Authorization':'Bearer '+(token or self.token),**(headers or {})};c.request(method,path,body=data,headers=h);r=c.getresponse();raw=r.read();result=(r.status,raw,dict(r.getheaders()));c.close();return result
     def close(self):
         if self.proc and self.proc.poll() is None:
             self.proc.terminate()
@@ -181,6 +183,12 @@ class IsolationTests(unittest.TestCase):
             code,model_task=self.b.call('POST','/api/tasks',{'conversationId':self.c['id'],'requestId':str(uuid.uuid4()),'message':'指定模型','model':selected},self.a['token'])
             self.assertEqual(code,202);self.assertEqual(model_task['model'],selected);self.b.call('POST','/api/tasks/'+model_task['id']+'/cancel',{},self.a['token'])
         self.assertEqual(self.b.call('POST','/api/tasks',{'conversationId':self.c['id'],'requestId':str(uuid.uuid4()),'message':'bad model','model':'unknown-model'},self.a['token'])[0],400)
+        b=self.b;a=self.a;payload=b'PK\x03\x04forum-source';_,created=b.create(a,self.c,'生成并下载源码');_,claimed=b.poll(a,self.c);t=claimed['task']
+        headers={'Content-Type':'application/zip','X-Doubao-Client':a['clientId'],'X-Doubao-Lease':t['lease'],'X-Doubao-File-Key':'a'*64,'X-Doubao-File-Name':urllib.parse.quote('论坛源码.zip')}
+        code,raw,_=b.raw('POST','/api/browser/files/'+t['id'],payload,a['token'],headers);self.assertEqual(code,201,raw);saved=json.loads(raw);self.assertEqual(saved['name'],'论坛源码.zip');self.assertEqual(saved['size'],len(payload))
+        self.assertEqual(b.event(a,t,1,'done',text='源码已生成')[0],200);view=b.call('GET','/api/tasks/'+t['id'],token=a['token'])[1];self.assertEqual(view['files'][0]['name'],'论坛源码.zip')
+        path='/api/tasks/'+t['id']+'/files/'+saved['id'];self.assertEqual(b.raw('GET',path,token=self.z['token'])[0],404)
+        code,data,response_headers=b.raw('GET',path,token=a['token']);self.assertEqual(code,200);self.assertEqual(data,payload);self.assertIn('attachment',response_headers['Content-disposition'])
 class ConversationPinTests(unittest.TestCase):
     def test_pin_is_scoped_persisted_and_sorted_first(self):
         b=Backend()
