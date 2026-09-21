@@ -41,7 +41,7 @@ async function readImage(url){
 function kick(delay=0){if(cyclePromise){if(delay===0)rerun=true;return;}clearTimeout(timer);timer=setTimeout(()=>runCycle().catch(()=>{}),delay);}
 const pause=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 async function ping(tabId){let timeout;try{return await Promise.race([chrome.tabs.sendMessage(tabId,{type:'jsc-ping'}),new Promise((_,reject)=>{timeout=setTimeout(()=>reject(new Error('页面响应超时')),3000);})]);}catch{return null;}finally{clearTimeout(timeout);}}
-async function ensureContent(tabId,waitMs=25_000){
+async function ensureContent(tabId,waitMs=60_000){
   const deadline=Date.now()+waitMs;let tab,lastInfo,reloaded=false;
   while(Date.now()<deadline){
     tab=await chrome.tabs.get(tabId);
