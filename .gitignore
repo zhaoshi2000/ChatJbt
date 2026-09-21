@@ -1,0 +1,9 @@
+data/
+logs/
+out/backend/
+out/backend-build-*/
+out/backend-*.jar
+out/tests/
+__pycache__/
+test-artifacts/
+*.log

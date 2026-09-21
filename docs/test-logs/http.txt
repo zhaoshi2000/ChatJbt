@@ -1,0 +1,20 @@
+test_01_scope_all_read_write_stream_and_history (__main__.IsolationTests.test_01_scope_all_read_write_stream_and_history) ... ok
+test_02_account_A_offline_does_not_block_B (__main__.IsolationTests.test_02_account_A_offline_does_not_block_B) ... ok
+test_03_per_conversation_concurrency_and_idempotency (__main__.IsolationTests.test_03_per_conversation_concurrency_and_idempotency) ... ok
+test_04_duplicate_tabs_race_only_one_create (__main__.IsolationTests.test_04_duplicate_tabs_race_only_one_create) ... ok
+test_05_profile_binding_fences (__main__.IsolationTests.test_05_profile_binding_fences) ... ok
+test_06_lease_seq_and_upstream_url_guards (__main__.IsolationTests.test_06_lease_seq_and_upstream_url_guards) ... ok
+test_07_conversation_url_cannot_be_shared_by_two_sessions (__main__.IsolationTests.test_07_conversation_url_cannot_be_shared_by_two_sessions) ... ok
+test_08_parallel_cap_only_affects_one_account (__main__.IsolationTests.test_08_parallel_cap_only_affects_one_account) ... ok
+test_09_rotate_preserves_history_and_revokes_token (__main__.IsolationTests.test_09_rotate_preserves_history_and_revokes_token) ... ok
+test_10_deletion_and_diagnostics_isolated (__main__.IsolationTests.test_10_deletion_and_diagnostics_isolated) ... ok
+test_11_http_security_and_bundle (__main__.IsolationTests.test_11_http_security_and_bundle) ... ok
+test_12_restart_recovers_scoped_lease_and_outbox_ACK (__main__.IsolationTests.test_12_restart_recovers_scoped_lease_and_outbox_ACK) ... ok
+test_13_unknown_submission_no_silent_new_thread (__main__.IsolationTests.test_13_unknown_submission_no_silent_new_thread) ... ok
+test_14_two_stream_subscribers_receive_same_snapshot (__main__.IsolationTests.test_14_two_stream_subscribers_receive_same_snapshot) ... ok
+test_legacy_is_read_only_not_assigned_to_new_accounts (__main__.MigrationTests.test_legacy_is_read_only_not_assigned_to_new_accounts) ... ok
+
+----------------------------------------------------------------------
+Ran 15 tests in 2.279s
+
+OK

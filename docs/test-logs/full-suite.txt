@@ -1,0 +1,218 @@
+Built out/backend.jar (Java 21+)
+JSON codec: 16 assertions passed
+TAP version 13
+# Subtest: normalizes IPv4 loopback and localhost without IPv6 ambiguity
+ok 1 - normalizes IPv4 loopback and localhost without IPv6 ambiguity
+  ---
+  duration_ms: 0.886426
+  type: 'test'
+  ...
+# Subtest: rejects non-loopback hosts, credentials, paths, query and unsafe port
+ok 2 - rejects non-loopback hosts, credentials, paths, query and unsafe port
+  ---
+  duration_ms: 0.615426
+  type: 'test'
+  ...
+# Subtest: a short silent period without stop button is NOT completion
+ok 3 - a short silent period without stop button is NOT completion
+  ---
+  duration_ms: 0.159114
+  type: 'test'
+  ...
+# Subtest: searching and busy states prevent premature completion
+ok 4 - searching and busy states prevent premature completion
+  ---
+  duration_ms: 0.10191
+  type: 'test'
+  ...
+# Subtest: completion requires nonempty stable text and a turn completion action
+ok 5 - completion requires nonempty stable text and a turn completion action
+  ---
+  duration_ms: 0.136881
+  type: 'test'
+  ...
+# Subtest: recovery identifies repeated prompts by stable message id
+ok 6 - recovery identifies repeated prompts by stable message id
+  ---
+  duration_ms: 0.215567
+  type: 'test'
+  ...
+# Subtest: missing stable id refuses to attach to a different duplicate prompt
+ok 7 - missing stable id refuses to attach to a different duplicate prompt
+  ---
+  duration_ms: 0.150421
+  type: 'test'
+  ...
+# Subtest: normalization and fingerprints are stable across NBSP and line endings
+ok 8 - normalization and fingerprints are stable across NBSP and line endings
+  ---
+  duration_ms: 0.1497
+  type: 'test'
+  ...
+# Subtest: SSE parser handles UTF-8 split at every byte, CRLF, comments and event ids
+ok 9 - SSE parser handles UTF-8 split at every byte, CRLF, comments and event ids
+  ---
+  duration_ms: 6.153731
+  type: 'test'
+  ...
+# Subtest: SSE parser combines multiline data and ignores unknown fields
+ok 10 - SSE parser combines multiline data and ignores unknown fields
+  ---
+  duration_ms: 0.627684
+  type: 'test'
+  ...
+# Subtest: truncated EOF frame is not interpreted as successful completion
+ok 11 - truncated EOF frame is not interpreted as successful completion
+  ---
+  duration_ms: 0.31942
+  type: 'test'
+  ...
+# Subtest: Markdown export preserves literal output rather than executing HTML
+ok 12 - Markdown export preserves literal output rather than executing HTML
+  ---
+  duration_ms: 13.0737
+  type: 'test'
+  ...
+# Subtest: web and background bridge require the same v1.2.0 backend
+ok 13 - web and background bridge require the same v1.2.0 backend
+  ---
+  duration_ms: 0.13535
+  type: 'test'
+  ...
+# Subtest: queue hint distinguishes local connection, page readiness, pause, busy, draft and prior task
+ok 14 - queue hint distinguishes local connection, page readiness, pause, busy, draft and prior task
+  ---
+  duration_ms: 0.154708
+  type: 'test'
+  ...
+# Subtest: web connector is invisible and adds no document UI
+ok 15 - web connector is invisible and adds no document UI
+  ---
+  duration_ms: 1.427171
+  type: 'test'
+  ...
+# Subtest: content connector ignores messages from other frames or origins
+ok 16 - content connector ignores messages from other frames or origins
+  ---
+  duration_ms: 0.709655
+  type: 'test'
+  ...
+# Subtest: content connector forwards only the allowed fixed fields
+ok 17 - content connector forwards only the allowed fixed fields
+  ---
+  duration_ms: 0.613293
+  type: 'test'
+  ...
+# Subtest: content connector refuses generic extension commands
+ok 18 - content connector refuses generic extension commands
+  ---
+  duration_ms: 0.530481
+  type: 'test'
+  ...
+# Subtest: content connector does not activate on arbitrary loopback paths
+ok 19 - content connector does not activate on arbitrary loopback paths
+  ---
+  duration_ms: 0.539555
+  type: 'test'
+  ...
+# Subtest: parallel conversations create distinct tabs; never adopt an existing manual chat
+ok 20 - parallel conversations create distinct tabs; never adopt an existing manual chat
+  ---
+  duration_ms: 22.317871
+  type: 'test'
+  ...
+# Subtest: concurrent lane outboxes do not overwrite each other
+ok 21 - concurrent lane outboxes do not overwrite each other
+  ---
+  duration_ms: 6.679835
+  type: 'test'
+  ...
+# Subtest: foreign tab, document, account, conversation and iframe packets are rejected
+ok 22 - foreign tab, document, account, conversation and iframe packets are rejected
+  ---
+  duration_ms: 4.046258
+  type: 'test'
+  ...
+# Subtest: durable outbox replays exactly once after worker restart with same browser session
+ok 23 - durable outbox replays exactly once after worker restart with same browser session
+  ---
+  duration_ms: 13.979945
+  type: 'test'
+  ...
+# Subtest: browser restart invalidates persistent numerical tab IDs
+ok 24 - browser restart invalidates persistent numerical tab IDs
+  ---
+  duration_ms: 3.870749
+  type: 'test'
+  ...
+# Subtest: uncertain submitted task is never blindly sent to a replacement blank tab
+ok 25 - uncertain submitted task is never blindly sent to a replacement blank tab
+  ---
+  duration_ms: 6.298524
+  type: 'test'
+  ...
+# Subtest: one broken conversation does not stop another conversation
+ok 26 - one broken conversation does not stop another conversation
+  ---
+  duration_ms: 3.902536
+  type: 'test'
+  ...
+# Subtest: cancelled task discards pending outbox and releases only its own work page
+ok 27 - cancelled task discards pending outbox and releases only its own work page
+  ---
+  duration_ms: 4.150001
+  type: 'test'
+  ...
+# Subtest: web operations require local origin, top frame, correct account and non-incognito profile
+ok 28 - web operations require local origin, top frame, correct account and non-incognito profile
+  ---
+  duration_ms: 2.748998
+  type: 'test'
+  ...
+# Subtest: master token cannot pair as a web bridge
+ok 29 - master token cannot pair as a web bridge
+  ---
+  duration_ms: 2.01456
+  type: 'test'
+  ...
+# Subtest: changing account inside an already bound profile is refused
+ok 30 - changing account inside an already bound profile is refused
+  ---
+  duration_ms: 1.340073
+  type: 'test'
+  ...
+# Subtest: extension icon/workspace action opens independent pages instead of side panel
+ok 31 - extension icon/workspace action opens independent pages instead of side panel
+  ---
+  duration_ms: 1.121972
+  type: 'test'
+  ...
+1..31
+# tests 31
+# suites 0
+# pass 31
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 136.954593
+test_01_scope_all_read_write_stream_and_history (__main__.IsolationTests.test_01_scope_all_read_write_stream_and_history) ... ok
+test_02_account_A_offline_does_not_block_B (__main__.IsolationTests.test_02_account_A_offline_does_not_block_B) ... ok
+test_03_per_conversation_concurrency_and_idempotency (__main__.IsolationTests.test_03_per_conversation_concurrency_and_idempotency) ... ok
+test_04_duplicate_tabs_race_only_one_create (__main__.IsolationTests.test_04_duplicate_tabs_race_only_one_create) ... ok
+test_05_profile_binding_fences (__main__.IsolationTests.test_05_profile_binding_fences) ... ok
+test_06_lease_seq_and_upstream_url_guards (__main__.IsolationTests.test_06_lease_seq_and_upstream_url_guards) ... ok
+test_07_conversation_url_cannot_be_shared_by_two_sessions (__main__.IsolationTests.test_07_conversation_url_cannot_be_shared_by_two_sessions) ... ok
+test_08_parallel_cap_only_affects_one_account (__main__.IsolationTests.test_08_parallel_cap_only_affects_one_account) ... ok
+test_09_rotate_preserves_history_and_revokes_token (__main__.IsolationTests.test_09_rotate_preserves_history_and_revokes_token) ... ok
+test_10_deletion_and_diagnostics_isolated (__main__.IsolationTests.test_10_deletion_and_diagnostics_isolated) ... ok
+test_11_http_security_and_bundle (__main__.IsolationTests.test_11_http_security_and_bundle) ... ok
+test_12_restart_recovers_scoped_lease_and_outbox_ACK (__main__.IsolationTests.test_12_restart_recovers_scoped_lease_and_outbox_ACK) ... ok
+test_13_unknown_submission_no_silent_new_thread (__main__.IsolationTests.test_13_unknown_submission_no_silent_new_thread) ... ok
+test_14_two_stream_subscribers_receive_same_snapshot (__main__.IsolationTests.test_14_two_stream_subscribers_receive_same_snapshot) ... ok
+test_legacy_is_read_only_not_assigned_to_new_accounts (__main__.MigrationTests.test_legacy_is_read_only_not_assigned_to_new_accounts) ... ok
+
+----------------------------------------------------------------------
+Ran 15 tests in 2.448s
+
+OK

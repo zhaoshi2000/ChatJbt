@@ -1,0 +1,196 @@
+TAP version 13
+# Subtest: normalizes IPv4 loopback and localhost without IPv6 ambiguity
+ok 1 - normalizes IPv4 loopback and localhost without IPv6 ambiguity
+  ---
+  duration_ms: 0.870902
+  type: 'test'
+  ...
+# Subtest: rejects non-loopback hosts, credentials, paths, query and unsafe port
+ok 2 - rejects non-loopback hosts, credentials, paths, query and unsafe port
+  ---
+  duration_ms: 0.358969
+  type: 'test'
+  ...
+# Subtest: a short silent period without stop button is NOT completion
+ok 3 - a short silent period without stop button is NOT completion
+  ---
+  duration_ms: 0.147968
+  type: 'test'
+  ...
+# Subtest: searching and busy states prevent premature completion
+ok 4 - searching and busy states prevent premature completion
+  ---
+  duration_ms: 0.09449
+  type: 'test'
+  ...
+# Subtest: completion requires nonempty stable text and a turn completion action
+ok 5 - completion requires nonempty stable text and a turn completion action
+  ---
+  duration_ms: 0.134348
+  type: 'test'
+  ...
+# Subtest: recovery identifies repeated prompts by stable message id
+ok 6 - recovery identifies repeated prompts by stable message id
+  ---
+  duration_ms: 0.16939
+  type: 'test'
+  ...
+# Subtest: missing stable id refuses to attach to a different duplicate prompt
+ok 7 - missing stable id refuses to attach to a different duplicate prompt
+  ---
+  duration_ms: 0.138694
+  type: 'test'
+  ...
+# Subtest: normalization and fingerprints are stable across NBSP and line endings
+ok 8 - normalization and fingerprints are stable across NBSP and line endings
+  ---
+  duration_ms: 0.14914
+  type: 'test'
+  ...
+# Subtest: SSE parser handles UTF-8 split at every byte, CRLF, comments and event ids
+ok 9 - SSE parser handles UTF-8 split at every byte, CRLF, comments and event ids
+  ---
+  duration_ms: 5.646978
+  type: 'test'
+  ...
+# Subtest: SSE parser combines multiline data and ignores unknown fields
+ok 10 - SSE parser combines multiline data and ignores unknown fields
+  ---
+  duration_ms: 0.630909
+  type: 'test'
+  ...
+# Subtest: truncated EOF frame is not interpreted as successful completion
+ok 11 - truncated EOF frame is not interpreted as successful completion
+  ---
+  duration_ms: 0.276487
+  type: 'test'
+  ...
+# Subtest: Markdown export preserves literal output rather than executing HTML
+ok 12 - Markdown export preserves literal output rather than executing HTML
+  ---
+  duration_ms: 12.123567
+  type: 'test'
+  ...
+# Subtest: web and background bridge require the same v1.2.0 backend
+ok 13 - web and background bridge require the same v1.2.0 backend
+  ---
+  duration_ms: 0.170922
+  type: 'test'
+  ...
+# Subtest: queue hint distinguishes local connection, page readiness, pause, busy, draft and prior task
+ok 14 - queue hint distinguishes local connection, page readiness, pause, busy, draft and prior task
+  ---
+  duration_ms: 0.143181
+  type: 'test'
+  ...
+# Subtest: web connector is invisible and adds no document UI
+ok 15 - web connector is invisible and adds no document UI
+  ---
+  duration_ms: 1.739522
+  type: 'test'
+  ...
+# Subtest: content connector ignores messages from other frames or origins
+ok 16 - content connector ignores messages from other frames or origins
+  ---
+  duration_ms: 0.742473
+  type: 'test'
+  ...
+# Subtest: content connector forwards only the allowed fixed fields
+ok 17 - content connector forwards only the allowed fixed fields
+  ---
+  duration_ms: 0.594766
+  type: 'test'
+  ...
+# Subtest: content connector refuses generic extension commands
+ok 18 - content connector refuses generic extension commands
+  ---
+  duration_ms: 0.589508
+  type: 'test'
+  ...
+# Subtest: content connector does not activate on arbitrary loopback paths
+ok 19 - content connector does not activate on arbitrary loopback paths
+  ---
+  duration_ms: 0.643398
+  type: 'test'
+  ...
+# Subtest: parallel conversations create distinct tabs; never adopt an existing manual chat
+ok 20 - parallel conversations create distinct tabs; never adopt an existing manual chat
+  ---
+  duration_ms: 29.922113
+  type: 'test'
+  ...
+# Subtest: concurrent lane outboxes do not overwrite each other
+ok 21 - concurrent lane outboxes do not overwrite each other
+  ---
+  duration_ms: 6.168906
+  type: 'test'
+  ...
+# Subtest: foreign tab, document, account, conversation and iframe packets are rejected
+ok 22 - foreign tab, document, account, conversation and iframe packets are rejected
+  ---
+  duration_ms: 3.984208
+  type: 'test'
+  ...
+# Subtest: durable outbox replays exactly once after worker restart with same browser session
+ok 23 - durable outbox replays exactly once after worker restart with same browser session
+  ---
+  duration_ms: 9.834125
+  type: 'test'
+  ...
+# Subtest: browser restart invalidates persistent numerical tab IDs
+ok 24 - browser restart invalidates persistent numerical tab IDs
+  ---
+  duration_ms: 4.000722
+  type: 'test'
+  ...
+# Subtest: uncertain submitted task is never blindly sent to a replacement blank tab
+ok 25 - uncertain submitted task is never blindly sent to a replacement blank tab
+  ---
+  duration_ms: 5.813362
+  type: 'test'
+  ...
+# Subtest: one broken conversation does not stop another conversation
+ok 26 - one broken conversation does not stop another conversation
+  ---
+  duration_ms: 3.296565
+  type: 'test'
+  ...
+# Subtest: cancelled task discards pending outbox and releases only its own work page
+ok 27 - cancelled task discards pending outbox and releases only its own work page
+  ---
+  duration_ms: 3.356274
+  type: 'test'
+  ...
+# Subtest: web operations require local origin, top frame, correct account and non-incognito profile
+ok 28 - web operations require local origin, top frame, correct account and non-incognito profile
+  ---
+  duration_ms: 1.87392
+  type: 'test'
+  ...
+# Subtest: master token cannot pair as a web bridge
+ok 29 - master token cannot pair as a web bridge
+  ---
+  duration_ms: 1.232375
+  type: 'test'
+  ...
+# Subtest: changing account inside an already bound profile is refused
+ok 30 - changing account inside an already bound profile is refused
+  ---
+  duration_ms: 0.877322
+  type: 'test'
+  ...
+# Subtest: extension icon/workspace action opens independent pages instead of side panel
+ok 31 - extension icon/workspace action opens independent pages instead of side panel
+  ---
+  duration_ms: 0.933975
+  type: 'test'
+  ...
+1..31
+# tests 31
+# suites 0
+# pass 31
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 135.622579

@@ -1,0 +1,15 @@
+PASS: web UI initializes with authenticated Java backend using explicit offline origin/storage/fetch and extension-message adapters
+PASS: unready page blocks POST /api/tasks, preserves draft, and keeps the reason after a refresh
+PASS: simultaneous Send calls only create one backend task after a successful preflight
+PASS: connect-and-continue on an existing queued task creates no duplicate task
+PASS: unbound queued task has an actionable reason at 400px mobile width without overflow
+PASS: real content script does not complete during a search pause with no Stop button
+PASS: closing the observer UI leaves the real Java task running
+PASS: a fresh document with the original user-message ID resumes without sending again
+PASS: backend restart and a complete assistant DOM replacement preserve exactly the final snapshot
+PASS: reopening restores task history, code blocks, and inert HTML text
+PASS: 1360 px desktop and 400/320 px mobile layouts avoid horizontal overflow and keep Send visible
+PASS: diagnostics contain neither local pairing token nor complete conversation text
+PASS: UI cancellation reaches Java and the content adapter stops the owned turn
+PASS: uncertain POST retries the same requestId even when the page is now unavailable; no duplicate task
+PASS: no uncaught page JavaScript errors in the covered flows

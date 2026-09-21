@@ -1,0 +1,22 @@
+<!doctype html><html lang="zh-CN"><meta charset="UTF-8"><title>ChatGPT DOM fixture — NOT the real service</title>
+<style>body{font:16px sans-serif;margin:30px}main{max-width:760px}article{padding:16px;margin:10px;background:#eee}#prompt-textarea{border:1px solid #888;padding:12px;min-height:70px}button{padding:10px} .markdown{white-space:pre-wrap} [hidden]{display:none!important}</style>
+<main><h1>受控测试页面，不连接真实 ChatGPT</h1><div id="turns"></div><form><div id="prompt-textarea" contenteditable="true"></div><input id="image-upload" type="file" accept="image/*" multiple hidden><button type="button" data-testid="model-selector" aria-haspopup="menu">5.6 即时</button><div id="model-menu" role="menu" hidden><button type="button" role="menuitem" data-model="gpt-5-6">5.6 即时</button><button type="button" role="menuitem" data-model="gpt-5-6-thinking">5.6 思考</button><button type="button" role="menuitem" data-model="gpt-5-6-pro">5.6 Pro</button><button type="button" role="menuitem" data-model="gpt-6-pro">6 Pro</button></div><button type="button" data-testid="send-button">发送</button></form></main>
+<script>
+window.fixture=JSON.parse(sessionStorage.getItem('fixture')||'{"count":0,"message":"","phase":"idle","text":"","stopCount":0}');
+const modelLabels={'gpt-5-6':'5.6 即时','gpt-5-6-thinking':'5.6 思考','gpt-5-6-pro':'5.6 Pro','gpt-6-pro':'6 Pro'};fixture.model||='gpt-5-6';
+function save(){sessionStorage.setItem('fixture',JSON.stringify(fixture));}
+function render(){
+ const turns=document.getElementById('turns');turns.replaceChildren();document.querySelector('[data-testid="stop-button"]')?.remove();
+ if(!fixture.message)return;
+ const user=document.createElement('article');user.dataset.testid='conversation-turn-1';const u=document.createElement('div');u.dataset.messageAuthorRole='user';u.dataset.messageId='fixture-user-'+fixture.count;u.textContent=fixture.message;user.append(u);turns.append(user);
+ const article=document.createElement('article');article.dataset.testid='conversation-turn-2';const assistant=document.createElement('div');assistant.dataset.messageAuthorRole='assistant';assistant.dataset.messageId='fixture-assistant-'+fixture.count;const markdown=document.createElement('div');markdown.className='markdown';markdown.textContent=fixture.text;assistant.append(markdown);article.append(assistant);
+ if(fixture.phase==='searching'){const status=document.createElement('div');status.setAttribute('role','status');status.textContent='正在搜索';article.append(status);}
+ if(fixture.phase==='complete'){const copy=document.createElement('button');copy.dataset.testid='copy-turn-action-button';copy.textContent='复制回复';article.append(copy);}
+ if(fixture.phase==='generating'){const stop=document.createElement('button');stop.dataset.testid='stop-button';stop.textContent='停止';stop.onclick=()=>{fixture.stopCount++;fixture.phase='stopped';save();render();};document.querySelector('main').append(stop);}
+ turns.append(article);
+}
+window.setFixture=(phase,text)=>{fixture.phase=phase;if(text!==undefined)fixture.text=text;save();render();};
+document.getElementById('model-selector').onclick=()=>document.getElementById('model-menu').hidden=false;for(const item of document.querySelectorAll('[data-model]'))item.onclick=()=>{fixture.model=item.dataset.model;document.getElementById('model-selector').textContent=modelLabels[fixture.model];document.getElementById('model-menu').hidden=true;save();};
+document.querySelector('[data-testid="send-button"]').onclick=()=>{const el=document.getElementById('prompt-textarea');fixture.count++;fixture.message=el.innerText;fixture.files=Array.from(document.getElementById('image-upload').files).map(f=>({name:f.name,type:f.type,size:f.size}));fixture.phase='searching';fixture.text='正在整理检索到的信息……';el.textContent='';save();render();};
+render();
+</script></html>

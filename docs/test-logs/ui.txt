@@ -1,0 +1,15 @@
+PASS: actual UI initializes with scoped account and independent-history sidebar
+PASS: same-account pages keep independent conversation selection and session drafts
+PASS: different-account UIs show only their own histories
+PASS: unready per-conversation page preserves draft and prevents task creation
+PASS: three simultaneous pages receive correctly routed snapshots from real Java backend
+PASS: same conversation can be viewed in two pages without creating extra tasks
+PASS: page reconstruction restores URL-selected conversation and its own saved draft
+PASS: lost HTTP acknowledgement retries the same request ID, not a new message
+PASS: Markdown renderer treats raw HTML and unsafe URLs as inert text
+PASS: mobile 390px viewport has no horizontal overflow
+PASS: admin UI creates scoped credentials, clears sensitive dialog fields, never persists master token
+PASS: two actual DOM adapters remain running during a long search pause
+PASS: actual adapters bind different upstream URLs, replace rewritten text, and finish without cross-account replies
+PASS: no unhandled page JavaScript errors across controlled scenes
+14 UI / DOM scenarios passed

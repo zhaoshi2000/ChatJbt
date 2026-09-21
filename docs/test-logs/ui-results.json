@@ -1,0 +1,20 @@
+{
+  "passed": [
+    "actual UI initializes with scoped account and independent-history sidebar",
+    "same-account pages keep independent conversation selection and session drafts",
+    "different-account UIs show only their own histories",
+    "unready per-conversation page preserves draft and prevents task creation",
+    "three simultaneous pages receive correctly routed snapshots from real Java backend",
+    "same conversation can be viewed in two pages without creating extra tasks",
+    "page reconstruction restores URL-selected conversation and its own saved draft",
+    "lost HTTP acknowledgement retries the same request ID, not a new message",
+    "Markdown renderer treats raw HTML and unsafe URLs as inert text",
+    "mobile 390px viewport has no horizontal overflow",
+    "admin UI creates scoped credentials, clears sensitive dialog fields, never persists master token",
+    "two actual DOM adapters remain running during a long search pause",
+    "actual adapters bind different upstream URLs, replace rewritten text, and finish without cross-account replies",
+    "no unhandled page JavaScript errors across controlled scenes"
+  ],
+  "unhandledErrors": [],
+  "scope": "Offline browser adapters; real Java HTTP; no actual profile/extension install or ChatGPT login."
+}

@@ -1,0 +1,109 @@
+/** Actual v1.2 worker, deterministic Chrome/storage/HTTP adapters. Not a real extension install. */
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import vm from 'node:vm';
+import {webcrypto} from 'node:crypto';
+const ID='a'.repeat(32),ORIGIN=`chrome-extension://${ID}/`,TOKEN='b'.repeat(43),VERSION='1.2.0';
+const ACCOUNT='account-aaaaaaaa',CLIENT='client-aaaaaaaa',C1='conversation-1111',C2='conversation-2222';
+const source=['extension/shared.js','extension/lane-core.js','extension/background.js'].map(p=>fs.readFileSync(new URL('../'+p,import.meta.url),'utf8').replace(/^import .*\n/gm,'').replaceAll('export ','')).join('\n');
+const clone=x=>x===undefined?undefined:structuredClone(x);
+const event=()=>({handlers:[],addListener(f){this.handlers.push(f);}});
+function harness({saved={},session={doubaoSession:'browser-session'},server={}}={}){
+ saved.settings??={backendUrl:'http://127.0.0.1:48643',token:TOKEN,enabled:true,accountId:ACCOUNT,accountName:'账号 A'};
+ saved.clientId??=CLIENT;
+ const tasks=server.tasks??=[C1,C2].map((c,i)=>({id:`task-0000000${i}`,accountId:ACCOUNT,conversationId:c,message:'测试 '+i,state:'queued',provider:'browser',created:Date.now()+i,text:'',lastSeq:0,submitted:false,lease:'lease-'+i,deadline:Date.now()+120000,checkpoint:{}}));
+ const conversations=server.conversations??=Object.fromEntries([C1,C2].map(id=>[id,{id,accountId:ACCOUNT,title:id,upstreamUrl:''}]));
+ const counters={creates:[],runs:[],requests:[],events:[],discards:[],reloads:[],alarms:0,scheduled:[]};
+ const tabs=new Map([[10,{id:10,url:'https://chatgpt.com/c/manual',windowId:1,autoDiscardable:true,active:true}]]),pages=new Map();
+ const messages=event(),removed=event();
+ const makeStorage=obj=>({get:async keys=>keys===null?clone(obj):Object.fromEntries((Array.isArray(keys)?keys:[keys]).map(k=>[k,clone(obj[k])])),set:async patch=>Object.assign(obj,clone(patch)),remove:async key=>{for(const k of Array.isArray(key)?key:[key])delete obj[k];},setAccessLevel:async()=>{}});
+ const chrome={storage:{local:makeStorage(saved),session:makeStorage(session)},runtime:{id:ID,getURL:p=>ORIGIN+p,onMessage:messages,onStartup:event(),onInstalled:event()},alarms:{get:async()=>null,create:async()=>{counters.alarms++;},onAlarm:event()},action:{onClicked:event(),setBadgeText:async()=>{}},windows:{update:async()=>{}},scripting:{executeScript:async()=>{}},tabs:{onUpdated:event(),onRemoved:removed,
+  get:async id=>{if(!tabs.has(id))throw Error('missing tab');return clone(tabs.get(id));},
+  create:async({url,active})=>{const id=Math.max(...tabs.keys())+1,tab={id,url,active,windowId:1,autoDiscardable:true};tabs.set(id,tab);pages.set(id,{ok:true,version:VERSION,composer:true,busy:false,hasDraft:false,activeTask:null,documentKey:'doc-'+id,href:url,userCount:url.includes('/c/')?1:0,detail:'fixture ready'});counters.creates.push(id);return clone(tab);},
+  reload:async id=>{if(!tabs.has(id))throw Error('missing');tabs.get(id).discarded=false;counters.reloads.push(id);return clone(tabs.get(id));},
+  update:async(id,patch)=>{if(!tabs.has(id))throw Error('missing');Object.assign(tabs.get(id),patch);if('autoDiscardable'in patch)counters.discards.push([id,patch.autoDiscardable]);return clone(tabs.get(id));},
+  sendMessage:async(id,packet)=>{if(packet.type==='jsc-ping')return clone(pages.get(id));if(packet.type==='jsc-run')counters.runs.push({id,packet:clone(packet)});return {ok:true};}}};
+ const fetch=async(url,options={})=>{
+   const path=new URL(url).pathname,body=options.body?JSON.parse(options.body):{};counters.requests.push({path,body});let value={ok:true},status=200;
+   if(path==='/api/me')value={version:VERSION,role:server.role||'account',account:{id:server.accountId||ACCOUNT,name:'账号 A',clientId:CLIENT},maxConcurrent:3};
+   else if(path==='/health')value={version:VERSION};
+   else if(path==='/api/tasks')value={tasks:clone([...tasks].reverse())};
+   else if(path.startsWith('/api/tasks/'))value=clone(tasks.find(t=>t.id===path.split('/').at(-1)));
+   else if(path.startsWith('/api/conversations/'))value=clone(conversations[path.split('/').at(-1)]);
+   else if(path==='/api/browser/poll'){const t=tasks.find(t=>t.conversationId===body.conversationId&&!['completed','cancelled','interrupted','error'].includes(t.state));if(t)t.state='running';value={task:clone(t)||null};}
+   else if(path==='/api/browser/event'){
+     const t=tasks.find(t=>t.id===body.id);counters.events.push(clone(body));
+     if(server.failEvent){status=503;value={error:'offline'};}
+     else if(body.seq>t.lastSeq+1){status=409;value={error:'sequence gap'};}
+     else if(body.seq<=t.lastSeq)value={lastSeq:t.lastSeq,state:t.state,duplicate:true};
+     else {t.lastSeq=body.seq;t.checkpoint=body.checkpoint;if(body.type==='submitting')t.submitted=true;if(['snapshot','done'].includes(body.type))t.text=body.text;if(body.type==='done')t.state='completed';value={lastSeq:t.lastSeq,state:t.state};}
+   }else if(path==='/api/bridge/register')value={account:{id:server.accountId||ACCOUNT,name:'账号 A'},maxConcurrent:3};
+   return new Response(JSON.stringify(value??{error:'missing'}),{status:value===undefined?404:status,headers:{'Content-Type':'application/json'}});
+ };
+ const context=vm.createContext({chrome,fetch,console,URL,Response,AbortController,TextDecoder,TextEncoder,Uint8Array,structuredClone,crypto:webcrypto,Promise,Date,Math,Error,JSON,Set,Map,setTimeout:(fn,delay)=>{counters.scheduled.push(delay);return 1;},clearTimeout:()=>{}});
+ vm.runInContext(source+'\n;globalThis.__test={boot,runCycle,ensureLane,forwardEvent};',context);
+ async function msg(message,sender){return new Promise(resolve=>messages.handlers[0](message,{id:ID,...sender},resolve));}
+ const web=(operation,extra={},url='http://127.0.0.1:48643/web/',frameId=0)=>msg({type:'doubao-web',operation,accountId:ACCOUNT,...extra},{url,frameId,tab:{id:50,url}});
+ const internal=(type,extra={})=>msg({type,...extra},{url:ORIGIN+'options.html'});
+ const packet=(c,text='快照',extra={})=>{const lane=saved['lane:'+c];return {type:'bridge-event',id:lane.active.task.id,accountId:ACCOUNT,conversationId:c,documentKey:lane.bridge.documentKey,eventId:crypto.randomUUID(),eventType:'snapshot',text,checkpoint:{phase:'observing'},...extra};};
+ async function content(p,override={}){const lane=saved['lane:'+p.conversationId],id=lane?.bridge?.tabId;return msg(p,{url:tabs.get(id)?.url||'https://chatgpt.com/',frameId:0,tab:clone(tabs.get(id)),...override});}
+ return {saved,session,server,tasks,conversations,tabs,pages,counters,web,internal,packet,content,boot:context.__test.boot,cycle:()=>context.__test.runCycle()};
+}
+
+test('parallel conversations create distinct tabs; never adopt an existing manual chat',async()=>{
+ const h=harness();await h.cycle();assert.equal(h.counters.runs.length,2);
+ const a=h.saved['lane:'+C1],b=h.saved['lane:'+C2];assert.notEqual(a.bridge.tabId,b.bridge.tabId);assert.notEqual(a.bridge.tabId,10);
+ assert.equal(h.tabs.get(a.bridge.tabId).url,'https://chatgpt.com/');assert.equal(a.active.task.conversationId,C1);
+});
+test('selected model is delivered unchanged to the bound ChatGPT page',async()=>{
+ const h=harness();h.tasks[0].model='gpt-6-pro';await h.cycle();const run=h.counters.runs.find(x=>x.packet.task.conversationId===C1);assert.equal(run.packet.task.model,'gpt-6-pro');
+});
+test('concurrent lane outboxes do not overwrite each other',async()=>{
+ const h=harness();await h.cycle();const a=h.packet(C1,'A 的回答'),b=h.packet(C2,'B 的回答');
+ const results=await Promise.all([h.content(a),h.content(b)]);assert.ok(results.every(x=>x.ok));
+ assert.equal(h.tasks[0].text,'A 的回答');assert.equal(h.tasks[1].text,'B 的回答');assert.equal(h.saved['lane:'+C1].active.seq,1);assert.equal(h.saved['lane:'+C2].active.seq,1);
+});
+test('foreign tab, document, account, conversation and iframe packets are rejected',async()=>{
+ const h=harness();await h.cycle();const base=h.packet(C1);
+ for(const patch of [{accountId:'account-bbbbbbbb'},{documentKey:'old-document'},{conversationId:C2},{id:'other-task000'}])assert.equal((await h.content({...base,...patch})).ok,false);
+ assert.equal((await h.content(base,{tab:{id:10}})).ok,false);assert.equal((await h.content(base,{frameId:1})).ok,false);assert.equal(h.counters.events.length,0);
+});
+test('durable outbox replays exactly once after worker restart with same browser session',async()=>{
+ const options={saved:{},session:{doubaoSession:'same'},server:{}};let h=harness(options);await h.cycle();h.server.failEvent=true;
+ const p=h.packet(C1,'只保留一次');assert.equal((await h.content(p)).ok,false);assert.equal(h.saved['lane:'+C1].active.pending.seq,1);
+ h.server.failEvent=false;const tabs=h.tabs,pages=h.pages;h=harness(options);for(const [k,v]of tabs)h.tabs.set(k,v);for(const [k,v]of pages)h.pages.set(k,v);
+ await h.cycle();assert.equal(h.tasks[0].lastSeq,1);assert.equal(h.tasks[0].text,'只保留一次');assert.equal((await h.content(p)).ok,true);assert.equal(h.tasks[0].lastSeq,1);
+});
+test('browser restart invalidates persistent numerical tab IDs',async()=>{
+ const options={saved:{},session:{doubaoSession:'old'},server:{}};let h=harness(options);await h.cycle();options.session={};h=harness(options);await h.boot;
+ assert.equal(h.saved['lane:'+C1].bridge.tabId,null);assert.equal(h.saved['lane:'+C2].bridge.documentKey,null);
+});
+test('discarded work tab is automatically reloaded instead of requiring a manual click',async()=>{
+ const h=harness();await h.cycle();const id=h.saved['lane:'+C1].bridge.tabId;h.tabs.get(id).discarded=true;await h.cycle();assert.ok(h.counters.reloads.includes(id));assert.equal(h.saved['lane:'+C1].ready,true);
+});
+test('uncertain submitted task is never blindly sent to a replacement blank tab',async()=>{
+ const h=harness();await h.cycle();const lane=h.saved['lane:'+C1];lane.active.task.submitted=true;h.tasks[0].submitted=true;h.tabs.delete(lane.bridge.tabId);
+ const count=h.counters.runs.length;await h.cycle();assert.match(h.saved['lane:'+C1].detail,/无法安全恢复/);assert.equal(h.counters.runs.filter(x=>x.packet.task.conversationId===C1).length,1);assert.ok(h.counters.runs.length>=count);
+});
+test('one broken conversation does not stop another conversation',async()=>{
+ const h=harness();await h.cycle();const lane=h.saved['lane:'+C1];h.tabs.get(lane.bridge.tabId).url='https://example.org/';const previous=h.counters.runs.filter(x=>x.packet.task.conversationId===C2).length;
+ await h.cycle();assert.match(h.saved['lane:'+C1].detail,/离开 ChatGPT/);assert.equal(h.counters.runs.filter(x=>x.packet.task.conversationId===C2).length,previous+1);
+});
+test('cancelled task discards pending outbox and releases only its own work page',async()=>{
+ const h=harness();await h.cycle();h.server.failEvent=true;await h.content(h.packet(C1));h.tasks[0].state='cancelled';await h.cycle();
+ assert.equal(h.saved['lane:'+C1].active,null);assert.ok(h.saved['lane:'+C2].active);assert.ok(h.counters.discards.some(([id,v])=>id===h.saved['lane:'+C1].bridge.tabId&&v));
+});
+test('web operations require local origin, top frame, correct account and non-incognito profile',async()=>{
+ const h=harness();for(const url of ['https://example.org/web/','http://127.0.0.1:49999/web/','http://127.0.0.1:48643/not-web'])assert.equal((await h.web('ui-status',{},url)).ok,false);
+ assert.equal((await h.web('ui-status',{},undefined,1)).ok,false);assert.equal((await h.web('ui-prepare-bridge',{accountId:'other-account00',conversationId:C1})).ok,false);
+});
+test('master token cannot pair as a web bridge',async()=>{
+ const h=harness({server:{role:'admin'}});assert.equal((await h.internal('ui-save-settings',{settings:{token:TOKEN,confirmProfile:true}})).ok,false);
+});
+test('changing account inside an already bound profile is refused',async()=>{
+ const h=harness({server:{accountId:'account-bbbbbbbb'}});const result=await h.internal('ui-save-settings',{settings:{token:TOKEN,confirmProfile:true}});assert.equal(result.ok,false);assert.match(result.error,/另一个账号/);
+});
+test('extension icon/workspace action opens independent pages instead of side panel',async()=>{
+ const h=harness();await h.internal('ui-open-workspace');await h.internal('ui-open-workspace');assert.equal(h.counters.creates.length,2);for(const id of h.counters.creates)assert.equal(h.tabs.get(id).url,'http://127.0.0.1:48643/web/');
+});

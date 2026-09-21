@@ -1,0 +1,21 @@
+{
+  "environment": "Offline Chromium document + runtime/fetch test adapters + real Java backend; not actual extension installation or live ChatGPT",
+  "count": 15,
+  "passed": [
+    "web UI initializes with authenticated Java backend using explicit offline origin/storage/fetch and extension-message adapters",
+    "unready page blocks POST /api/tasks, preserves draft, and keeps the reason after a refresh",
+    "simultaneous Send calls only create one backend task after a successful preflight",
+    "connect-and-continue on an existing queued task creates no duplicate task",
+    "unbound queued task has an actionable reason at 400px mobile width without overflow",
+    "real content script does not complete during a search pause with no Stop button",
+    "closing the observer UI leaves the real Java task running",
+    "a fresh document with the original user-message ID resumes without sending again",
+    "backend restart and a complete assistant DOM replacement preserve exactly the final snapshot",
+    "reopening restores task history, code blocks, and inert HTML text",
+    "1360 px desktop and 400/320 px mobile layouts avoid horizontal overflow and keep Send visible",
+    "diagnostics contain neither local pairing token nor complete conversation text",
+    "UI cancellation reaches Java and the content adapter stops the owned turn",
+    "uncertain POST retries the same requestId even when the page is now unavailable; no duplicate task",
+    "no uncaught page JavaScript errors in the covered flows"
+  ]
+}

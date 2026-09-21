@@ -1,0 +1,141 @@
+{
+  "environment": "Linux + Java 21; HTTP requests driven by Python, not Windows PowerShell.",
+  "scope": "Actual delivered JAR health, authentication, task cancellation, shutdown, persistence, port release and embedded class fingerprints.",
+  "not_tested": [
+    "Windows PowerShell 5.1 execution",
+    "Windows process enumeration/termination",
+    "BAT launcher",
+    "Real browser/extension stopping"
+  ],
+  "count": 32,
+  "results": [
+    {
+      "test": "Doubao 1.1.0 health/port",
+      "result": "passed"
+    },
+    {
+      "test": "Doubao 1.1.0 explicit app identity",
+      "result": "passed"
+    },
+    {
+      "test": "Doubao 1.1.0 wrong token rejected",
+      "result": "passed"
+    },
+    {
+      "test": "Doubao 1.1.0 create queued task",
+      "result": "passed"
+    },
+    {
+      "test": "Doubao 1.1.0 authenticated task list",
+      "result": "passed"
+    },
+    {
+      "test": "Doubao 1.1.0 cancel before shutdown",
+      "result": "passed"
+    },
+    {
+      "test": "Doubao 1.1.0 graceful shutdown accepted",
+      "result": "passed"
+    },
+    {
+      "test": "Doubao 1.1.0 token file kept",
+      "result": "passed"
+    },
+    {
+      "test": "Doubao 1.1.0 history files kept",
+      "result": "passed"
+    },
+    {
+      "test": "Doubao 1.1.0 process exited",
+      "result": "passed"
+    },
+    {
+      "test": "Doubao 1.1.0 listen port released",
+      "result": "passed"
+    },
+    {
+      "test": "JavaStreamChat 1.0.0 health/port",
+      "result": "passed"
+    },
+    {
+      "test": "JavaStreamChat 1.0.0 explicit app identity",
+      "result": "passed"
+    },
+    {
+      "test": "JavaStreamChat 1.0.0 wrong token rejected",
+      "result": "passed"
+    },
+    {
+      "test": "JavaStreamChat 1.0.0 create queued task",
+      "result": "passed"
+    },
+    {
+      "test": "JavaStreamChat 1.0.0 authenticated task list",
+      "result": "passed"
+    },
+    {
+      "test": "JavaStreamChat 1.0.0 cancel before shutdown",
+      "result": "passed"
+    },
+    {
+      "test": "JavaStreamChat 1.0.0 graceful shutdown accepted",
+      "result": "passed"
+    },
+    {
+      "test": "JavaStreamChat 1.0.0 token file kept",
+      "result": "passed"
+    },
+    {
+      "test": "JavaStreamChat 1.0.0 history files kept",
+      "result": "passed"
+    },
+    {
+      "test": "JavaStreamChat 1.0.0 process exited",
+      "result": "passed"
+    },
+    {
+      "test": "JavaStreamChat 1.0.0 listen port released",
+      "result": "passed"
+    },
+    {
+      "test": "Doubao demo 1.0.0 health/port",
+      "result": "passed"
+    },
+    {
+      "test": "Doubao demo 1.0.0 legacy protocol identity",
+      "result": "passed"
+    },
+    {
+      "test": "Doubao demo 1.0.0 unauthenticated legacy shutdown",
+      "result": "passed"
+    },
+    {
+      "test": "Doubao demo 1.0.0 process exited",
+      "result": "passed"
+    },
+    {
+      "test": "Doubao demo 1.0.0 listen port released",
+      "result": "passed"
+    },
+    {
+      "test": "Doubao-WebBridge-v1.1.0.zip BackendServer.class fingerprint",
+      "result": "passed"
+    },
+    {
+      "test": "JavaStreamChat-v1.0.0.zip BackendServer.class fingerprint",
+      "result": "passed"
+    },
+    {
+      "test": "JavaStreamChat-v1.0.0.zip ChatClient.class fingerprint",
+      "result": "passed"
+    },
+    {
+      "test": "Doubao-WebClient-v1.0.0.zip ChatClient.class fingerprint",
+      "result": "passed"
+    },
+    {
+      "test": "Doubao-WebClient-v1.0.0.zip BackendServer.class fingerprint",
+      "result": "passed"
+    }
+  ]
+}
