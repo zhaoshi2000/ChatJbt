@@ -1,7 +1,7 @@
 /* DOM adapter only. No cookies, browser session extraction, private ChatGPT APIs or remote code. */
 (() => {
   const VERSION='1.2.0';
-  const CONTENT_REVISION='2026-09-21.4';
+  const CONTENT_REVISION='2026-09-21.8';
   const documentKey=crypto.randomUUID();
   function conversationUrl(raw){try{const u=new URL(raw);return u.protocol==='https:'&&['chatgpt.com','chat.openai.com'].includes(u.hostname)&&/^\/(?:g\/[A-Za-z0-9_-]+\/)?c\/(?:WEB:)?[A-Za-z0-9_-]+$/.test(u.pathname)?'https://chatgpt.com'+u.pathname:'';}catch{return '';}}
   function stableConversationUrl(raw){const url=conversationUrl(raw);return url&&!/\/c\/WEB:/.test(url)?url:'';}
@@ -119,19 +119,38 @@
     const turn=turnOf(node),candidates=[...node.querySelectorAll('a'),...(turn&&turn!==node?turn.querySelectorAll('a'):[])],seen=new Set();
     return candidates.filter(link=>{const href=link.getAttribute('href')||'';if(!inTurn(link)||seen.has(href)||!(/^(?:sandbox:)?\/mnt\/data\//.test(href)||/\/backend-api\/(?:conversation\/[^/]+\/interpreter\/download|estuary\/content)/.test(href)))return false;seen.add(href);return true;});
   }
-  async function responseFiles(links,node){
-    const result=[],conversation=location.pathname.match(/\/c\/([^/]+)$/)?.[1]||'';
+  function answerFileActions(node,userNode){
+    if(!node||!userNode)return [];
+    const nextUser=Array.from(document.querySelectorAll('[data-message-author-role="user"]')).find(candidate=>candidate!==userNode&&!!(userNode.compareDocumentPosition(candidate)&Node.DOCUMENT_POSITION_FOLLOWING));
+    const inTurn=button=>!userNode.contains(button)&&!!(userNode.compareDocumentPosition(button)&Node.DOCUMENT_POSITION_FOLLOWING)&&(!nextUser||!!(button.compareDocumentPosition(nextUser)&Node.DOCUMENT_POSITION_FOLLOWING));
+    const candidates=Array.from(document.querySelectorAll('button,[role="button"]')).filter(inTurn),seen=new Set(),result=[];
+    for(const button of candidates){const label=(button.getAttribute('aria-label')||button.getAttribute('title')||elementText(button)).trim(),match=label.match(/^(?:下载|download)\s+(.{1,160})$/i)||label.match(/^(.{1,150}\.[A-Za-z0-9]{1,12})$/);if(!match||/^(?:文件|file)$/i.test(match[1]))continue;const name=match[1].trim().replace(/[\\/]/g,'_');if(seen.add(name))result.push({name});}
+    return result.slice(0,4);
+  }
+  function triggerFileDownload(taskMessage,fileName){
+    const user=users().filter(item=>core.normalize(item.text)===core.normalize(taskMessage)).at(-1);if(!user)throw new Error('未找到生成该文件的原消息');
+    const nextUser=users().find(item=>item.node!==user.node&&!!(user.node.compareDocumentPosition(item.node)&Node.DOCUMENT_POSITION_FOLLOWING));
+    const inTurn=button=>!user.node.contains(button)&&!!(user.node.compareDocumentPosition(button)&Node.DOCUMENT_POSITION_FOLLOWING)&&(!nextUser||!!(button.compareDocumentPosition(nextUser.node)&Node.DOCUMENT_POSITION_FOLLOWING));
+    const buttons=Array.from(document.querySelectorAll('button,[role="button"]')).filter(inTurn),name=core.normalize(fileName);
+    let target=buttons.find(button=>{const label=core.normalize(button.getAttribute('aria-label')||button.getAttribute('title')||elementText(button));return /^(?:下载|download)\s+/i.test(label)&&label.includes(name);});
+    if(!target){const named=buttons.find(button=>core.normalize(elementText(button))===name);for(let parent=named?.parentElement,depth=0;parent&&depth<4&&!target;parent=parent.parentElement,depth++)target=Array.from(parent.querySelectorAll('button,[role="button"]')).find(button=>/^(?:下载文件|download file)$/i.test(core.normalize(button.getAttribute('aria-label')||button.getAttribute('title')||elementText(button))));}
+    if(!target)throw new Error('没有找到 ChatGPT 文件卡片的下载按钮');target.click();return {ok:true,name:fileName};
+  }
+  async function responseFiles(links,node,actions=[]){
+    const result=[],conversation=location.pathname.match(/\/c\/([^/]+)$/)?.[1]||'',messageNode=node?.closest?.('[data-message-id]')||node?.querySelector?.('[data-message-id]')||node,messageId=messageNode?.getAttribute?.('data-message-id')||messageNode?.querySelector?.('[data-message-id]')?.getAttribute('data-message-id');
+    async function resolveSandbox(sandboxPath,fallbackName,key){
+      if(!conversation||!messageId)return;
+      result.push({name:(fallbackName||sandboxPath.split('/').pop()||'生成文件').slice(0,160).replace(/[\\/]/g,'_'),mimeType:'application/octet-stream',conversation,messageId,sandboxPath,key});
+    }
     for(const link of links.slice(0,4)){
       const raw=link.getAttribute('href')||'';let url='',name='',mimeType='application/octet-stream',key=raw;
       if(/^(?:sandbox:)?\/mnt\/data\//.test(raw)){
-        const sandboxPath=raw.replace(/^sandbox:/,'');const messageNode=link.closest('[data-message-id]')||node?.closest?.('[data-message-id]')||node;const messageId=messageNode?.getAttribute?.('data-message-id')||messageNode?.querySelector?.('[data-message-id]')?.getAttribute('data-message-id');
-        if(!conversation||!messageId)continue;
-        const endpoint='/backend-api/conversation/'+encodeURIComponent(conversation)+'/interpreter/download?message_id='+encodeURIComponent(messageId)+'&sandbox_path='+encodeURIComponent(sandboxPath)+'&download_intent=true';
-        const response=await fetch(endpoint,{credentials:'include',cache:'no-store'});if(!response.ok)throw new Error('获取生成文件下载地址失败：HTTP '+response.status);const data=await response.json();url=data.download_url||'';name=data.file_name||sandboxPath.split('/').pop()||'生成文件';mimeType=data.mime_type||mimeType;key=sandboxPath;
+        const sandboxPath=raw.replace(/^sandbox:/,'');await resolveSandbox(sandboxPath,sandboxPath.split('/').pop(),sandboxPath);continue;
       }else{const parsed=new URL(raw,location.href);url=parsed.href;name=parsed.searchParams.get('fn')||elementText(link).trim()||'生成文件';key=parsed.pathname+':'+name;}
       const parsed=new URL(url,location.href);if(parsed.protocol!=='https:'||parsed.hostname!=='chatgpt.com'||parsed.pathname!=='/backend-api/estuary/content')throw new Error('生成文件下载地址不安全，已拒绝保存');
       result.push({name:name.slice(0,160).replace(/[\\/]/g,'_'),mimeType,url:parsed.href,key});
-    }return result;
+    }
+    const names=new Set(result.map(file=>file.name));for(const action of actions.slice(0,4))if(!names.has(action.name)){await resolveSandbox('/mnt/data/'+action.name,action.name,'/mnt/data/'+action.name);names.add(action.name);}return result;
   }
   async function responseImages(nodes){
     const result=[];for(const [index,img] of nodes.slice(0,4).entries()){
@@ -303,7 +322,7 @@
           await emit(job,'checkpoint',{checkpoint:cp});
         }
         const nodes=assistantAfter(list[index].node),newest=nodes.at(-1);
-        const text=nodes.map(answerText).filter(Boolean).join('\n\n'),media=answerImages(newest,list[index].node),fileLinks=answerFileLinks(newest,list[index].node),mediaKey=[...media.map(img=>(img.currentSrc||img.src)+':'+img.naturalWidth+'x'+img.naturalHeight),...fileLinks.map(link=>link.getAttribute('href')||'')].join('|');
+        const text=nodes.map(answerText).filter(Boolean).join('\n\n'),media=answerImages(newest,list[index].node),fileLinks=answerFileLinks(newest,list[index].node),downloads=answerFileActions(newest,list[index].node),mediaKey=[...media.map(img=>(img.currentSrc||img.src)+':'+img.naturalWidth+'x'+img.naturalHeight),...fileLinks.map(link=>link.getAttribute('href')||''),...downloads.map(file=>file.name)].join('|');
         const responseNode=media.at(-1)||newest,progress=pageProgress(responseNode),now=Date.now();
         if(text!==lastText){lastText=text;lastChange=now;}
         if(mediaKey!==lastMedia){lastMedia=mediaKey;lastChange=now;}
@@ -314,8 +333,8 @@
         if(progress.detail!==lastDetail||now-lastProgress>12_000){
           await emit(job,'progress',{detail:progress.detail,checkpoint:cp});lastDetail=progress.detail;lastProgress=now;
         }
-        if(core.mayComplete({text,hasMedia:media.length>0||fileLinks.length>0,busy:progress.busy,searching:progress.searching,completionAction:completionAction(responseNode)||media.length>0||fileLinks.length>0,stableMs:now-lastChange})){
-          const images=await responseImages(media),fileSources=await responseFiles(fileLinks,newest);cp.phase='finished';await emit(job,'done',{text,images,fileSources,checkpoint:cp});return;
+        if(core.mayComplete({text,hasMedia:media.length>0||fileLinks.length>0||downloads.length>0,busy:progress.busy,searching:progress.searching,completionAction:completionAction(responseNode)||media.length>0||fileLinks.length>0||downloads.length>0,stableMs:now-lastChange})){
+          const images=await responseImages(media),fileSources=await responseFiles(fileLinks,newest,downloads);cp.phase='finished';await emit(job,'done',{text,images,fileSources,downloads:downloads.filter(file=>!fileSources.some(source=>source.name===file.name)),checkpoint:cp});return;
         }
         const turn=turnOf(newest);
         const error=Array.from(turn?.querySelectorAll('[role="alert"]') || []).filter(visible).map(elementText).join(' ');
@@ -341,6 +360,10 @@
       if(active){respond({ok:active.task.id===packet.task.id,error:active.task.id===packet.task.id?undefined:'页面仍在处理上一条任务'});return;}
       const job={task:packet.task,expectedUrl:conversationUrl(packet.expectedUrl),checkpoint:structuredClone(packet.checkpoint || {}),deadline:packet.task.deadline || Date.now()+900_000,cancelled:false,lastPushedText:packet.task.text || ''};
       active=job;respond({ok:true});execute(job);return;
+    }
+    if(packet?.type==='jsc-download-file'){
+      if(packet.documentKey!==documentKey||typeof packet.taskMessage!=='string'||typeof packet.fileName!=='string'){respond({ok:false,error:'无效下载请求'});return;}
+      try{respond(triggerFileDownload(packet.taskMessage,packet.fileName));}catch(error){respond({ok:false,error:error.message||String(error)});};return;
     }
     if(packet?.type==='jsc-release'){
       if(active?.task.id===packet.id){if(packet.state!=='completed')stopIfOwned(active);active.cancelled=true;}

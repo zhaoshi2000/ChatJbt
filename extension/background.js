@@ -1,7 +1,7 @@
 import {DEFAULT_URL,VERSION,TERMINAL,normalizeBaseUrl,apiRequest} from './shared.js';
 import {chatUrl,conversationUrl,stableConversationUrl,pageAtTarget,validId,assertTask,assertPacket,planTaskIds} from './lane-core.js';
 const storage=chrome.storage.local, PREFIX='lane:', ACCOUNT_TAB='accountWorkTab', ALARM='doubao-multi-recover';
-const CONTENT_REVISION='2026-09-21.4';
+const CONTENT_REVISION='2026-09-21.8';
 const get=async key=>(await storage.get(key))[key];
 const write=value=>storage.set(value);
 const locks=new Map();
@@ -40,10 +40,22 @@ async function readImage(url){
   const bytes=new Uint8Array(await blob.arrayBuffer());let binary='';for(let i=0;i<bytes.length;i+=0x8000)binary+=String.fromCharCode(...bytes.subarray(i,i+0x8000));
   return {ok:true,mimeType:['image/png','image/jpeg','image/webp','image/gif'].includes(blob.type)?blob.type:'image/png',base64:btoa(binary)};
 }
-async function uploadGeneratedFile(task,source){
-  if(!source||typeof source.name!=='string'||typeof source.url!=='string'||typeof source.key!=='string'||source.name.length>160)throw new Error('生成文件信息无效');
+async function resolveGeneratedFile(source,tabId,senderUrl){
+  if(typeof source.url==='string'&&source.url)return source;
+  if(!Number.isInteger(tabId)||typeof source.conversation!=='string'||typeof source.messageId!=='string'||typeof source.sandboxPath!=='string'||!/^\/mnt\/data\/[^/\\]{1,160}$/.test(source.sandboxPath))throw new Error('生成文件解析信息无效');
+  const page=conversationUrl(senderUrl);if(page!=='https://chatgpt.com/c/'+source.conversation)throw new Error('生成文件会话与工作页不匹配');
+  const endpoint='/backend-api/conversation/'+encodeURIComponent(source.conversation)+'/interpreter/download?message_id='+encodeURIComponent(source.messageId)+'&sandbox_path='+encodeURIComponent(source.sandboxPath);
+  const executed=await chrome.scripting.executeScript({target:{tabId,frameIds:[0]},world:'MAIN',func:async ({path,fileName})=>{const parse=async response=>{const data=await response.clone().json().catch(()=>({}));return {ok:response.ok,status:response.status,downloadUrl:data.download_url||'',fileName:data.file_name||'',mimeType:data.mime_type||''};};try{const target=new URL(path,location.href),headers={'x-chatgpt-sandbox-download-source':'web_artifact_download','x-openai-target-path':target.pathname,'x-openai-target-route':'/backend-api/conversation/{conversation_id}/interpreter/download','x-openai-web-frontend':'core_web','oai-language':document.documentElement.lang||navigator.language||'zh-CN'},direct=await fetch(target.href,{credentials:'include',cache:'no-store',headers}),value=await parse(direct);if(value.ok)return value;
+    const originalFetch=window.fetch,originalClick=HTMLAnchorElement.prototype.click,originalOpen=window.open;let finish;const captured=new Promise(resolve=>finish=resolve),timer=setTimeout(()=>finish({ok:false,status:value.status}),12_000);
+    window.fetch=async function(...args){const response=await originalFetch.apply(this,args);try{const url=new URL(typeof args[0]==='string'?args[0]:args[0]?.url||'',location.href);if(url.pathname===target.pathname&&url.searchParams.get('message_id')===target.searchParams.get('message_id'))finish(await parse(response));}catch{}return response;};
+    HTMLAnchorElement.prototype.click=function(){try{const url=new URL(this.href,location.href);if(url.pathname==='/backend-api/estuary/content')return;}catch{}return originalClick.call(this);};window.open=function(url,...args){try{if(new URL(url,location.href).pathname==='/backend-api/estuary/content')return null;}catch{}return originalOpen.call(this,url,...args);};
+    const norm=value=>String(value||'').replace(/\s+/g,' ').trim(),buttons=Array.from(document.querySelectorAll('button,[role="button"]')),wanted=norm(fileName),button=buttons.find(el=>{const label=norm(el.getAttribute('aria-label')||el.getAttribute('title')||el.innerText||el.textContent);return label===wanted||(/^(?:下载|download)\s+/i.test(label)&&label.includes(wanted));});if(!button)finish({ok:false,status:404,error:'未找到文件卡片'});else button.click();const result=await captured;clearTimeout(timer);window.fetch=originalFetch;HTMLAnchorElement.prototype.click=originalClick;window.open=originalOpen;return result;}catch(error){return {ok:false,status:0,error:error?.message||String(error)};}},args:[{path:endpoint,fileName:source.name}]});
+  const value=executed?.[0]?.result;if(!value?.ok)throw new Error('获取生成文件下载地址失败：HTTP '+(value?.status||0));return {...source,url:value.downloadUrl,name:(value.fileName||source.name),mimeType:value.mimeType||source.mimeType};
+}
+async function uploadGeneratedFile(task,source,tabId,senderUrl){
+  if(!source||typeof source.name!=='string'||typeof source.key!=='string'||source.name.length>160)throw new Error('生成文件信息无效');source=await resolveGeneratedFile(source,tabId,senderUrl);
   const remote=new URL(source.url);if(remote.protocol!=='https:'||remote.hostname!=='chatgpt.com'||remote.pathname!=='/backend-api/estuary/content')throw new Error('生成文件地址不安全');
-  const response=await fetch(remote.href,{cache:'no-store',credentials:'omit'});if(!response.ok)throw new Error('下载 ChatGPT 生成文件失败：HTTP '+response.status);
+  const response=await fetch(remote.href,{cache:'no-store',credentials:'include',referrer:senderUrl,referrerPolicy:'strict-origin-when-cross-origin'});if(!response.ok)throw new Error('下载 ChatGPT 生成文件失败：HTTP '+response.status);
   const blob=await response.blob();if(!blob.size)throw new Error('ChatGPT 返回了空文件');if(blob.size>50_000_000)throw new Error('生成文件超过 50 MB，未自动保存');
   const config=await settings(),clientId=await get('clientId'),hash=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(source.key)))).map(v=>v.toString(16).padStart(2,'0')).join('');
   const saved=await fetch(config.backendUrl+'/api/browser/files/'+encodeURIComponent(task.id),{method:'POST',headers:{Authorization:'Bearer '+config.token,'Content-Type':blob.type||source.mimeType||'application/octet-stream','X-Doubao-Client':clientId,'X-Doubao-Lease':task.lease,'X-Doubao-File-Key':hash,'X-Doubao-File-Name':encodeURIComponent(source.name)},body:blob,credentials:'omit',redirect:'error'});
@@ -137,11 +149,12 @@ async function forwardEvent(packet,sender){
     lane=await flush(lane);const a=lane.active;
     if(a.lastAck===packet.eventId||TERMINAL.has(a.task.state))return {ok:true,state:a.task.state,terminal:TERMINAL.has(a.task.state)};
     if(!['checkpoint','submitting','snapshot','progress','done','error','interrupted'].includes(packet.eventType)||typeof packet.eventId!=='string'||packet.eventId.length>100)throw new Error('无效事件类型');
-    if(packet.fileSources!==undefined){if(packet.eventType!=='done'||!Array.isArray(packet.fileSources)||packet.fileSources.length>4)throw new Error('生成文件回传无效');for(const source of packet.fileSources)await uploadGeneratedFile(a.task,source);}
+    if(packet.fileSources!==undefined){if(packet.eventType!=='done'||!Array.isArray(packet.fileSources)||packet.fileSources.length>4)throw new Error('生成文件回传无效');for(const source of packet.fileSources)await uploadGeneratedFile(a.task,source,sender.tab?.id,sender.url);}
     a.checkpoint={...a.checkpoint,...packet.checkpoint};
     a.pending={id:a.task.id,accountId:lane.accountId,conversationId:lane.conversationId,clientId:await get('clientId'),lease:a.task.lease,seq:a.seq+1,eventId:packet.eventId,type:packet.eventType,checkpoint:a.checkpoint};
     if(typeof packet.text==='string')a.pending.text=packet.text.slice(0,1_000_000);
     if(packet.images!==undefined){if(!Array.isArray(packet.images)||packet.images.length>4||packet.images.some(x=>!x||typeof x.name!=='string'||typeof x.mimeType!=='string'||typeof x.base64!=='string'||x.base64.length>8_100_000))throw new Error('回复图片数据无效');a.pending.images=packet.images;}
+    if(packet.downloads!==undefined){if(packet.eventType!=='done'||!Array.isArray(packet.downloads)||packet.downloads.length>4||packet.downloads.some(x=>!x||typeof x.name!=='string'||!x.name.trim()||x.name.length>160))throw new Error('网页下载项无效');a.pending.downloads=packet.downloads.map(x=>({name:x.name.trim()}));}
     if(typeof packet.detail==='string')a.pending.detail=packet.detail.slice(0,600);
     if(packet.eventType==='submitting')a.task.submitted=true;
     await saveLane(lane);lane=await flush(lane);
@@ -246,6 +259,13 @@ async function uiOperation(message,sender,isInternal=false){
   const config=await settings();
   if(!isInternal&&message.accountId!==config.accountId)throw new Error('本网页账号与扩展配置文件不一致；请到对应账号的浏览器窗口操作');
   if(op==='ui-wake'){kick();return {ok:true};}
+  if(op==='ui-download-file'){
+    if(!validId(message.conversationId)||!validId(message.taskId)||typeof message.fileName!=='string'||!message.fileName.trim()||message.fileName.length>160)throw new Error('无效下载请求');
+    const other=(await allLanes()).find(l=>l.accountId===config.accountId&&l.active&&l.conversationId!==message.conversationId);if(other)throw new Error('工作页正在处理另一条消息，请完成后再下载');
+    const task=await request('/api/tasks/'+encodeURIComponent(message.taskId));if(task.accountId!==config.accountId||task.conversationId!==message.conversationId||task.state!=='completed')throw new Error('文件所属任务尚未完成或账号不匹配');
+    const inferred=(task.text||'').match(/已生成文件[：:\s]*(?:下载\s+)?([^\n]{1,160}\.[A-Za-z0-9]{1,12})/i)?.[1]?.trim(),allowed=(task.downloads||[]).some(file=>file.name===message.fileName)||inferred===message.fileName;if(!allowed)throw new Error('此任务没有登记该下载文件');
+    const result=await ensureLane(message.conversationId,{focus:false}),reply=await chrome.tabs.sendMessage(result.lane.bridge.tabId,{type:'jsc-download-file',documentKey:result.lane.bridge.documentKey,taskMessage:task.message,fileName:message.fileName});if(!reply?.ok)throw new Error(reply?.error||'ChatGPT 文件下载按钮未响应');return {ok:true,name:message.fileName};
+  }
   if(['ui-open-bridge','ui-prepare-bridge','ui-repair'].includes(op)){
     if(!config.enabled&&op==='ui-prepare-bridge')throw new Error('后台接单已暂停；消息未入队');
     await request('/api/me');

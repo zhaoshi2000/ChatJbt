@@ -40,7 +40,7 @@ final class TaskStore {
         final List<Map<String,Object>> attachments;
         final long created;
         String state="queued", text="", detail="已排队", owner="", lease="";
-        List<Map<String,Object>> images=new ArrayList<>(),files=new ArrayList<>();
+        List<Map<String,Object>> images=new ArrayList<>(),files=new ArrayList<>(),downloads=new ArrayList<>();
         long version=1, updated, started, deadline, lastSeq, leaseUntil, lastSaved;
         boolean submitted=false;
         Map<String,Object> checkpoint=new LinkedHashMap<>();
@@ -57,6 +57,7 @@ final class TaskStore {
             attachments=m.get("attachments") instanceof List<?> list?list.stream().filter(Map.class::isInstance).map(v->(Map<String,Object>)new LinkedHashMap<>((Map<String,Object>)v)).toList():List.of();
             if(m.get("images") instanceof List<?> list)images=list.stream().filter(Map.class::isInstance).map(v->(Map<String,Object>)new LinkedHashMap<>((Map<String,Object>)v)).toList();
             if(m.get("files") instanceof List<?> list)files=new ArrayList<>(list.stream().filter(Map.class::isInstance).map(v->(Map<String,Object>)new LinkedHashMap<>((Map<String,Object>)v)).toList());
+            downloads=downloadActions(m.get("downloads"));
             created=Json.num(m,"created",System.currentTimeMillis());updated=Json.num(m,"updated",created);started=Json.num(m,"started",0);deadline=Json.num(m,"deadline",0);
             state=Json.str(m,"state","error");text=Json.str(m,"text","");detail=Json.str(m,"detail","");version=Json.num(m,"version",1);
             owner=Json.str(m,"owner","");lease=Json.str(m,"lease","");lastSeq=Json.num(m,"lastSeq",0);leaseUntil=Json.num(m,"leaseUntil",0);submitted=Json.bool(m,"submitted",false);
@@ -64,7 +65,7 @@ final class TaskStore {
             if(accountId.equals("legacy-archive")&&!terminal()){state="interrupted";detail="旧版记录已只读归档；不自动续跑到任何新账号";version++;}
         }
         boolean terminal(){return TERMINAL.contains(state);}
-        Map<String,Object> view(){return Json.map("id",id,"accountId",accountId,"conversationId",conversationId,"requestId",requestId,"message",message,"model",model,"attachments",attachments,"images",images,"files",files.stream().map(f->Json.map("id",Json.str(f,"id",""),"name",Json.str(f,"name","文件"),"mimeType",Json.str(f,"mimeType","application/octet-stream"),"size",Json.num(f,"size",0))).toList(),"provider",provider,"created",created,"updated",updated,"started",started,"deadline",deadline,"state",state,"text",text,"detail",detail,"version",version,"submitted",submitted);}
+        Map<String,Object> view(){return Json.map("id",id,"accountId",accountId,"conversationId",conversationId,"requestId",requestId,"message",message,"model",model,"attachments",attachments,"images",images,"files",files.stream().map(f->Json.map("id",Json.str(f,"id",""),"name",Json.str(f,"name","文件"),"mimeType",Json.str(f,"mimeType","application/octet-stream"),"size",Json.num(f,"size",0))).toList(),"downloads",downloads,"provider",provider,"created",created,"updated",updated,"started",started,"deadline",deadline,"state",state,"text",text,"detail",detail,"version",version,"submitted",submitted);}
         Map<String,Object> disk(){var m=view();m.putAll(Json.map("owner",owner,"lease",lease,"leaseUntil",leaseUntil,"lastSeq",lastSeq,"checkpoint",checkpoint,"files",files));return m;}
         Map<String,Object> delivery(){var m=view();m.putAll(Json.map("lease",lease,"lastSeq",lastSeq,"checkpoint",new LinkedHashMap<>(checkpoint)));return m;}
     }
@@ -112,6 +113,7 @@ final class TaskStore {
         if(seq!=t.lastSeq+1)throw new Conflict("事件序号不连续");
         if(!Set.of("submitting","snapshot","progress","done","error","interrupted","checkpoint").contains(Json.str(e,"type","")))throw new IllegalArgumentException("未知事件类型");
         if(Json.str(e,"text",t.text).length()>1_000_000)throw new IllegalArgumentException("回答超过 100 万字符限制");
+        if(e.containsKey("downloads"))downloadActions(e.get("downloads"));
         if(e.get("checkpoint") instanceof Map<?,?> cp&&Json.stringify(cp).length()>100_000)throw new IllegalArgumentException("检查点过大");
     }
     @SuppressWarnings("unchecked") synchronized Map<String,Object> event(Map<String,Object> e) throws IOException {
@@ -130,6 +132,7 @@ final class TaskStore {
         if(type.equals("submitting")) {t.submitted=true;t.detail="已准备提交；恢复时不会盲目重发";}
         if(type.equals("snapshot")||type.equals("done"))t.text=text;
         if((type.equals("snapshot")||type.equals("done"))&&e.get("images") instanceof List<?> list)t.images=list.stream().filter(Map.class::isInstance).map(v->(Map<String,Object>)new LinkedHashMap<>((Map<String,Object>)v)).toList();
+        if(type.equals("done")&&e.containsKey("downloads"))t.downloads=downloadActions(e.get("downloads"));
         if(type.equals("snapshot"))t.detail="正在接收网页回复";
         if(type.equals("progress"))t.detail=Json.str(e,"detail","等待页面回复");
         if(type.equals("done")){t.state="completed";t.detail="已完成";}
@@ -137,6 +140,10 @@ final class TaskStore {
         t.lastSeq=seq;t.leaseUntil=System.currentTimeMillis()+60_000;
         // Every browser ACK is durable: retry after worker/backend restart is idempotent.
         changed(t,true);return Json.map("ok",true,"lastSeq",t.lastSeq,"state",t.state,"terminal",t.terminal());
+    }
+    static List<Map<String,Object>> downloadActions(Object value){
+        if(value==null)return new ArrayList<>();if(!(value instanceof List<?> list)||list.size()>4)throw new IllegalArgumentException("网页下载项无效");
+        var out=new ArrayList<Map<String,Object>>();var seen=new HashSet<String>();for(Object raw:list){if(!(raw instanceof Map<?,?> map))throw new IllegalArgumentException("网页下载项无效");Object valueName=map.get("name");String name=valueName==null?"":String.valueOf(valueName).trim();if(name.isEmpty()||name.length()>160||name.contains("/")||name.contains("\\")||name.chars().anyMatch(ch->ch<32))throw new IllegalArgumentException("网页下载文件名无效");if(seen.add(name))out.add(Json.map("name",name));}return out;
     }
     synchronized void begin(Task t) throws IOException {
         if(t.terminal()||!t.state.equals("queued"))return;

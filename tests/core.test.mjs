@@ -19,6 +19,7 @@ test('generated file control downloads through authenticated local storage witho
   assert.match(app,/fetch\(config\.backendUrl\+'\/api\/tasks\/'/);
   assert.match(app,/a\.download=file\.name\|\|'生成文件'/);
   assert.doesNotMatch(app,/window\.open\([^\n]*\/files\//);
+  assert.match(app,/webWorker\('ui-download-file'/);
 });
 
 test('normalizes IPv4 loopback and localhost without IPv6 ambiguity',()=>{

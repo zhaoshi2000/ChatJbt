@@ -189,6 +189,9 @@ class IsolationTests(unittest.TestCase):
         self.assertEqual(b.event(a,t,1,'done',text='源码已生成')[0],200);view=b.call('GET','/api/tasks/'+t['id'],token=a['token'])[1];self.assertEqual(view['files'][0]['name'],'论坛源码.zip')
         path='/api/tasks/'+t['id']+'/files/'+saved['id'];self.assertEqual(b.raw('GET',path,token=self.z['token'])[0],404)
         code,data,response_headers=b.raw('GET',path,token=a['token']);self.assertEqual(code,200);self.assertEqual(data,payload);self.assertIn('attachment',response_headers['Content-disposition'])
+        _,remote_created=b.create(a,self.c,'生成浏览器文件卡片');_,remote_claimed=b.poll(a,self.c);remote=remote_claimed['task']
+        self.assertEqual(b.event(a,remote,1,'done',text='已生成文件：下载 forum.zip',downloads=[{'name':'forum.zip'}])[0],200)
+        remote_view=b.call('GET','/api/tasks/'+remote_created['id'],token=a['token'])[1];self.assertEqual(remote_view['downloads'],[{'name':'forum.zip'}])
 class ConversationPinTests(unittest.TestCase):
     def test_pin_is_scoped_persisted_and_sorted_first(self):
         b=Backend()
