@@ -13,17 +13,24 @@
   const pick=selector=>Array.from(document.querySelectorAll(selector)).find(visible) || null;
   const composer=()=>pick('textarea#prompt-textarea, [contenteditable="true"]#prompt-textarea, [contenteditable="true"][data-lexical-editor="true"], textarea[data-testid="prompt-textarea"]');
   const fileInput=()=>Array.from(document.querySelectorAll('input[type="file"]')).find(el=>!el.disabled&&(!el.accept||/image|png|jpeg|jpg|webp|gif/i.test(el.accept)))||null;
-  const modelPatterns={
-    'gpt-5-6':[/^5\.6$/i,/^5\.6\s*(?:instant|即时)/i],
-    'gpt-5-6-thinking':[/^5\.6\s*(?:thinking|思考)/i],
-    'gpt-5-6-pro':[/^5\.6\s*pro/i],
-    'gpt-6-pro':[/^6\s*pro/i]
+  const modelSpecs={
+    'gpt-5-6':{family:[/^(?:最新|latest)$/i,/^5\.6\s*(?:instant|即时)/i]},
+    'gpt-5-6-thinking':{family:[/^GPT-?5\.6\s*Sol/i,/^5\.6\s*(?:thinking|思考)/i],effort:'standard',legacy:true},
+    'gpt-5-6-thinking-standard':{family:[/^GPT-?5\.6\s*Sol/i,/^5\.6\s*(?:thinking|思考)/i],effort:'standard'},
+    'gpt-5-6-thinking-extended':{family:[/^GPT-?5\.6\s*Sol/i,/^5\.6\s*(?:thinking|思考)/i],effort:'extended'},
+    'gpt-5-6-thinking-max':{family:[/^GPT-?5\.6\s*Sol/i,/^5\.6\s*(?:thinking|思考)/i],effort:'max'},
+    'gpt-5-6-pro':{family:[/^5\.6\s*Pro/i]},
+    'gpt-6-pro':{family:[/^(?:GPT-?)?6\s*Pro$/i,/^Pro$/i]}
   };
-  const compactText=el=>elementText(el).replace(/GPT[- ]?/ig,'').replace(/\s+/g,' ').trim();
-  const modelMatches=(el,slug)=>!!el&&modelPatterns[slug]?.some(pattern=>pattern.test(compactText(el)));
+  const effortPatterns={standard:[/^(?:5\.6\s*)?(?:中|medium|standard)$/i],extended:[/^(?:5\.6\s*)?(?:高|high|extended)$/i],max:[/^(?:5\.6\s*)?(?:极高|max)$/i]};
+  const effortChoicePatterns={standard:[/^(?:中|medium|standard)$/i],extended:[/^(?:高|high|extended)$/i],max:[/^(?:极高|max)$/i]};
+  const compactText=el=>elementText(el).replace(/\s+/g,' ').replace(/[›>✓]/g,'').trim();
+  const matches=(el,patterns)=>!!el&&patterns?.some(pattern=>pattern.test(compactText(el)));
+  const modelMatches=(el,slug)=>{const spec=modelSpecs[slug],text=compactText(el);if(!spec)return false;if(spec.effort&&effortPatterns[spec.effort].some(pattern=>pattern.test(text)))return true;return (!spec.effort||spec.legacy)&&spec.family.some(pattern=>pattern.test(text));};
   function modelButton(){
-    const candidates=Array.from(document.querySelectorAll('button[data-testid*="model" i],button[aria-label*="model" i],button[aria-label*="模型"],button[aria-haspopup="menu"],button[aria-haspopup="listbox"]')).filter(visible);
-    return candidates.find(el=>Object.keys(modelPatterns).some(slug=>modelMatches(el,slug)))||null;
+    const root=composer()?.closest('form')||composer()?.parentElement?.parentElement||document;
+    const candidates=Array.from(root.querySelectorAll('button[data-testid*="model" i],button[aria-label*="model" i],button[aria-label*="模型"],button[aria-label*="thinking" i],button[aria-label*="思考"],button[aria-haspopup="menu"],button[aria-haspopup="listbox"]')).filter(visible);
+    return candidates.find(el=>/最新|latest|5\.6|6\s*pro|思考强度|thinking|即时|instant|^中$|^高$|极高|^pro$/i.test(compactText(el)+' '+(el.getAttribute('aria-label')||'')))||null;
   }
   const sendButton=()=>pick('button[data-testid="send-button"], button[aria-label="Send prompt"], button[aria-label="Send message"], button[aria-label="发送提示"], button[aria-label="发送消息"], button[aria-label="发送"]');
   const stopButton=()=>pick('button[data-testid="stop-button"], button[aria-label*="Stop generating" i], button[aria-label*="Stop streaming" i], button[aria-label*="停止生成"], button[aria-label="停止"]');
@@ -151,13 +158,33 @@
   }
   async function selectModel(slug){
     if(!slug)return;
-    if(!modelPatterns[slug])throw new Error('不支持的模型选择');
+    const spec=modelSpecs[slug];if(!spec)throw new Error('不支持的模型选择');
     let trigger=modelButton();if(trigger&&modelMatches(trigger,slug))return;
     if(!trigger)throw new Error('没有找到 ChatGPT 模型选择器；请确认当前账号可切换模型');
     trigger.click();let option=null;const menuDeadline=Date.now()+5000;
-    while(!option&&Date.now()<menuDeadline){option=Array.from(document.querySelectorAll('[role="menuitem"],[role="option"],[data-radix-collection-item],button')).filter(el=>visible(el)&&el!==trigger).find(el=>modelMatches(el,slug));if(!option)await sleep(100);}
+    while(!option&&Date.now()<menuDeadline){option=Array.from(document.querySelectorAll('[role="menuitem"],[role="option"],[data-radix-collection-item],button')).filter(el=>visible(el)&&el!==trigger).find(el=>matches(el,spec.family));if(!option)await sleep(100);}
     if(!option)throw new Error('当前 ChatGPT 账号没有提供所选模型：'+slug);
-    option.click();const confirmDeadline=Date.now()+5000;
+    option.click();
+    // “最新”和“Pro”在新版页面选中后，右侧按钮仍可能只显示
+    // “思考强度”，因此点击到唯一精确菜单项就是可观察的确认点。
+    if(!spec.effort||spec.legacy){await sleep(350);return;}
+    if(spec.effort&&!spec.legacy){
+      const target=effortPatterns[spec.effort],effortDeadline=Date.now()+5000;let control=null;
+      while(Date.now()<effortDeadline){
+        trigger=modelButton();if(trigger&&matches(trigger,target))break;
+        control=Array.from(document.querySelectorAll('input[type="range"],[role="slider"]')).find(visible);if(control)break;
+        const exact=Array.from(document.querySelectorAll('[role="menuitem"],[role="option"],[data-radix-collection-item],button')).filter(visible).find(el=>matches(el,effortChoicePatterns[spec.effort]));
+        if(exact){exact.click();break;}
+        await sleep(100);
+      }
+      if(control){
+        const steps={standard:1,extended:2,max:3}[spec.effort];control.focus();
+        if(control instanceof HTMLInputElement){const min=Number(control.min||0),max=Number(control.max||3),value=min+(max-min)*(steps/3);Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(control,String(value));control.dispatchEvent(new Event('input',{bubbles:true}));control.dispatchEvent(new Event('change',{bubbles:true}));}
+        else{control.dispatchEvent(new KeyboardEvent('keydown',{key:'Home',code:'Home',bubbles:true}));for(let i=0;i<steps;i++)control.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowRight',code:'ArrowRight',bubbles:true}));}
+        control.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',code:'Escape',bubbles:true}));
+      }
+    }
+    const confirmDeadline=Date.now()+5000;
     while(Date.now()<confirmDeadline){await sleep(100);trigger=modelButton();if(trigger&&modelMatches(trigger,slug))return;}
     throw new Error('模型切换没有生效；为避免用错模型，本条消息未发送');
   }
@@ -246,7 +273,7 @@
       respond({ok:true,version:VERSION,documentKey,href:location.href,userCount:users().length,composer:!!composer(),busy:!!stopButton(),hasDraft:!!core.normalize(composerText(composer() || {})),activeTask:active?.task.id || null,detail:composer()?'ChatGPT 页面已连接': 'ChatGPT 输入框未就绪，请登录或进入聊天页面'});return;
     }
     if(packet?.type==='jsc-run'){
-      if(packet.documentKey!==documentKey||!packet.task?.accountId||!packet.task?.conversationId||!packet.task?.id||typeof packet.task.message!=='string'||!['','gpt-5-6','gpt-5-6-thinking','gpt-5-6-pro','gpt-6-pro'].includes(packet.task.model||'')){respond({ok:false,error:'无效任务'});return;}
+      if(packet.documentKey!==documentKey||!packet.task?.accountId||!packet.task?.conversationId||!packet.task?.id||typeof packet.task.message!=='string'||!['','gpt-5-6','gpt-5-6-thinking','gpt-5-6-thinking-standard','gpt-5-6-thinking-extended','gpt-5-6-thinking-max','gpt-5-6-pro','gpt-6-pro'].includes(packet.task.model||'')){respond({ok:false,error:'无效任务'});return;}
       if(active){respond({ok:active.task.id===packet.task.id,error:active.task.id===packet.task.id?undefined:'页面仍在处理上一条任务'});return;}
       const job={task:packet.task,expectedUrl:conversationUrl(packet.expectedUrl),checkpoint:structuredClone(packet.checkpoint || {}),deadline:packet.task.deadline || Date.now()+900_000,cancelled:false,lastPushedText:packet.task.text || ''};
       active=job;respond({ok:true});execute(job);return;

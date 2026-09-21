@@ -58,7 +58,7 @@ test('one account serializes conversations through one work tab and never adopts
  h.tasks[0].state='completed';await h.cycle();await h.cycle();const b=h.saved['lane:'+C2];assert.equal(h.counters.runs.length,2);assert.equal(b.bridge.tabId,a.bridge.tabId);assert.equal(h.counters.creates.length,1);
 });
 test('selected model is delivered unchanged to the bound ChatGPT page',async()=>{
- const h=harness();h.tasks[0].model='gpt-6-pro';await h.cycle();const run=h.counters.runs.find(x=>x.packet.task.conversationId===C1);assert.equal(run.packet.task.model,'gpt-6-pro');
+ const h=harness();h.tasks[0].model='gpt-5-6-thinking-extended';await h.cycle();const run=h.counters.runs.find(x=>x.packet.task.conversationId===C1);assert.equal(run.packet.task.model,'gpt-5-6-thinking-extended');
 });
 test('queued second conversation cannot overlap the active account work tab',async()=>{
  const h=harness();await h.cycle();assert.ok(h.saved['lane:'+C1].active);assert.equal(h.saved['lane:'+C2],undefined);

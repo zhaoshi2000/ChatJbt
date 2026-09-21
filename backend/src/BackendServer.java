@@ -146,7 +146,7 @@ public final class BackendServer {
                 if(message.isEmpty()&&!attachments.isEmpty())message="请查看并分析这张图片。";
                 if(message.isEmpty()||message.length()>32_000)throw new IllegalArgumentException("消息须为 1–32000 字符，或至少附带一张图片");
                 if(!attachments.isEmpty()&&!config.provider.equals("browser"))throw new IllegalArgumentException("图片目前仅支持 browser 网页桥接模式");
-                if(!Set.of("","gpt-5-6","gpt-5-6-thinking","gpt-5-6-pro","gpt-6-pro").contains(requestedModel))throw new IllegalArgumentException("不支持的模型选择");
+                if(!Set.of("","gpt-5-6","gpt-5-6-thinking","gpt-5-6-thinking-standard","gpt-5-6-thinking-extended","gpt-5-6-thinking-max","gpt-5-6-pro","gpt-6-pro").contains(requestedModel))throw new IllegalArgumentException("不支持的模型选择");
                 synchronized(workspaceLock){
                     var c=workspaces.scopedConversation(principal,conversationId);
                     if(Json.bool(c,"blocked",false))throw new TaskStore.Conflict("此会话需要人工核对："+Json.str(c,"blockReason",""));

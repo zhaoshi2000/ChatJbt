@@ -175,8 +175,9 @@ class IsolationTests(unittest.TestCase):
         self.assertEqual(self.b.call('GET','/api/tasks/'+t['id'],token=self.a['token'])[1]['images'],[generated])
         bad={**image,'mimeType':'text/html'}
         self.assertEqual(self.b.call('POST','/api/tasks',{'conversationId':self.c['id'],'requestId':str(uuid.uuid4()),'message':'bad','attachments':[bad]},self.a['token'])[0],400)
-        code,model_task=self.b.call('POST','/api/tasks',{'conversationId':self.c['id'],'requestId':str(uuid.uuid4()),'message':'指定模型','model':'gpt-6-pro'},self.a['token'])
-        self.assertEqual(code,202);self.assertEqual(model_task['model'],'gpt-6-pro');self.b.call('POST','/api/tasks/'+model_task['id']+'/cancel',{},self.a['token'])
+        for selected in ['gpt-5-6','gpt-5-6-thinking-standard','gpt-5-6-thinking-extended','gpt-5-6-thinking-max','gpt-6-pro']:
+            code,model_task=self.b.call('POST','/api/tasks',{'conversationId':self.c['id'],'requestId':str(uuid.uuid4()),'message':'指定模型','model':selected},self.a['token'])
+            self.assertEqual(code,202);self.assertEqual(model_task['model'],selected);self.b.call('POST','/api/tasks/'+model_task['id']+'/cancel',{},self.a['token'])
         self.assertEqual(self.b.call('POST','/api/tasks',{'conversationId':self.c['id'],'requestId':str(uuid.uuid4()),'message':'bad model','model':'unknown-model'},self.a['token'])[0],400)
 class MigrationTests(unittest.TestCase):
     def test_legacy_is_read_only_not_assigned_to_new_accounts(self):

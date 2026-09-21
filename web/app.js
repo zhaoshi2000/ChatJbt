@@ -9,7 +9,7 @@ let selected=new URL(location.href).searchParams.get('c')||'',createDraftId='';
 const streams=new Map();
 let lastAuth=0,newCredential=null;
 const validId=id=>/^[A-Za-z0-9_-]{8,100}$/.test(id||'');
-const modelLabel=value=>({'gpt-5-6':'5.6 即时','gpt-5-6-thinking':'5.6 思考','gpt-5-6-pro':'5.6 Pro','gpt-6-pro':'6 Pro'}[value]||'当前模型');
+const modelLabel=value=>({'gpt-5-6':'6 · 即时','gpt-5-6-thinking':'6 · 中','gpt-5-6-thinking-standard':'6 · 中','gpt-5-6-thinking-extended':'6 · 高','gpt-5-6-thinking-max':'6 · 极高','gpt-5-6-pro':'6 Pro','gpt-6-pro':'6 Pro'}[value]||'当前模型');
 if(!validId(selected))selected='';
 function banner(text){$('banner').textContent=text;$('banner').hidden=!text;}
 function toast(text){$('toast').textContent=text;$('toast').hidden=false;clearTimeout(toastTimer);toastTimer=setTimeout(()=>$('toast').hidden=true,3500);}
