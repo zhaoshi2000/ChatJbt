@@ -103,10 +103,14 @@ final class WorkspaceStore {
     synchronized void bindUrl(String id,String raw)throws IOException {
         String url=canonicalChatUrl(raw);if(url.isEmpty())return;
         var c=conversation(id);String previous=Json.str(c,"upstreamUrl","");
-        if(!previous.isEmpty()&&!previous.equals(url))throw new TaskStore.Conflict("工作标签页已切换到其他上游会话，拒绝串写；请恢复原工作标签页");
+        boolean provisional=url.contains("/c/WEB:"),previousProvisional=previous.contains("/c/WEB:");
+        // /c/WEB:* is a temporary address used while ChatGPT creates a chat.
+        // Binding it makes the later durable URL look like a different chat.
+        if(previous.isEmpty()&&provisional)return;
+        if(!previous.isEmpty()&&!previous.equals(url)&&!(previousProvisional&&!provisional))throw new TaskStore.Conflict("工作标签页已切换到其他上游会话，拒绝串写；请恢复原工作标签页");
         for(var other:conversations.values())if(!id.equals(Json.str(other,"id",""))&&Json.str(c,"accountId","").equals(Json.str(other,"accountId",""))&&url.equals(Json.str(other,"upstreamUrl","")))
             throw new TaskStore.Conflict("同一 ChatGPT 会话不能绑定两个不同本地会话");
-        if(previous.isEmpty())update(id,Json.map("upstreamUrl",url,"updated",System.currentTimeMillis()));
+        if(previous.isEmpty()||(previousProvisional&&!provisional))update(id,Json.map("upstreamUrl",url,"updated",System.currentTimeMillis()));
     }
     synchronized void block(String id,String reason)throws IOException {update(id,Json.map("blocked",true,"blockReason",reason));}
     synchronized void delete(String id)throws IOException {var old=conversation(id);conversations.remove(id);try{save();}catch(IOException e){conversations.put(id,old);throw e;}}

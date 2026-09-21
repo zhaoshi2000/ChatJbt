@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {VERSION,BACKEND_VERSION,browserQueueHint,normalizeBaseUrl,parseSse,taskMarkdown,TERMINAL} from '../extension/shared.js';
-import {conversationUrl} from '../extension/lane-core.js';
+import {conversationUrl,stableConversationUrl,pageAtTarget} from '../extension/lane-core.js';
 import '../extension/bridge-core.js';
 const core=globalThis.JSCBridgeCore;
 
@@ -46,6 +46,17 @@ test('normalization and fingerprints are stable across NBSP and line endings',()
 test('accepts current ChatGPT WEB-prefixed conversation ids without widening hosts',()=>{
   assert.equal(conversationUrl('https://chatgpt.com/c/WEB:c87d90fd-2a2f-42f9-98d7-a6c1d686643a'),'https://chatgpt.com/c/WEB:c87d90fd-2a2f-42f9-98d7-a6c1d686643a');
   assert.equal(conversationUrl('https://example.com/c/WEB:c87d90fd-2a2f-42f9-98d7-a6c1d686643a'),'');
+});
+test('does not persist ChatGPT provisional WEB conversation addresses',()=>{
+  assert.equal(stableConversationUrl('https://chatgpt.com/c/WEB:c87d90fd-2a2f-42f9-98d7-a6c1d686643a'),'');
+  assert.equal(stableConversationUrl('https://chatgpt.com/c/6ab0efe7-3730-83ec-a6f9-c22c98a8a62d'),'https://chatgpt.com/c/6ab0efe7-3730-83ec-a6f9-c22c98a8a62d');
+});
+test('waits for the requested ChatGPT navigation target before binding the page',()=>{
+  const target='https://chatgpt.com/c/WEB:c87d90fd-2a2f-42f9-98d7-a6c1d686643a';
+  assert.equal(pageAtTarget('https://chatgpt.com/',target),false);
+  assert.equal(pageAtTarget(target,target),true);
+  assert.equal(pageAtTarget('https://chatgpt.com/c/other','https://chatgpt.com/'),false);
+  assert.equal(pageAtTarget('https://chatgpt.com/','https://chatgpt.com/'),true);
 });
 async function parseChunks(text,chunkSize){
   const bytes=new TextEncoder().encode(text);let i=0;

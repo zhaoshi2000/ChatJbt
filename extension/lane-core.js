@@ -7,6 +7,15 @@ export function conversationUrl(raw) {
   const u=new URL(raw);
   return /^\/(?:g\/[A-Za-z0-9_-]+\/)?c\/(?:WEB:)?[A-Za-z0-9_-]+$/.test(u.pathname)?'https://chatgpt.com'+u.pathname:'';
 }
+export function stableConversationUrl(raw) {
+  const url=conversationUrl(raw);
+  return url&&!/\/c\/WEB:/.test(url)?url:'';
+}
+export function pageAtTarget(raw,target) {
+  if(!target)return true;
+  const wanted=conversationUrl(target);if(wanted)return conversationUrl(raw)===wanted;
+  try{const actual=new URL(raw),goal=new URL(target);return chatUrl(actual.href)&&chatUrl(goal.href)&&actual.hostname===goal.hostname&&actual.pathname==='/'&&goal.pathname==='/';}catch{return false;}
+}
 export function validId(value){return typeof value==='string'&&/^[A-Za-z0-9_-]{8,100}$/.test(value);}
 export function assertTask(task, accountId, conversationId) {
   if(!task||task.accountId!==accountId||task.conversationId!==conversationId||!validId(task.id))throw new Error('任务账号或会话不匹配，已拒绝执行');

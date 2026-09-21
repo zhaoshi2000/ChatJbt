@@ -1,9 +1,10 @@
 /* DOM adapter only. No cookies, browser session extraction, private ChatGPT APIs or remote code. */
 (() => {
   const VERSION='1.2.0';
-  const CONTENT_REVISION='2026-09-21.1';
+  const CONTENT_REVISION='2026-09-21.2';
   const documentKey=crypto.randomUUID();
   function conversationUrl(raw){try{const u=new URL(raw);return u.protocol==='https:'&&['chatgpt.com','chat.openai.com'].includes(u.hostname)&&/^\/(?:g\/[A-Za-z0-9_-]+\/)?c\/(?:WEB:)?[A-Za-z0-9_-]+$/.test(u.pathname)?'https://chatgpt.com'+u.pathname:'';}catch{return '';}}
+  function stableConversationUrl(raw){const url=conversationUrl(raw);return url&&!/\/c\/WEB:/.test(url)?url:'';}
   // Re-injection repairs this isolated world without reloading the ChatGPT page.
   try { globalThis.__JSCBridge?.dispose(); } catch {}
   const core=globalThis.JSCBridgeCore;
@@ -265,7 +266,7 @@
       }
       let lastText=job.task.text || '',lastMedia='',lastChange=Date.now(),lastPush=0,lastProgress=0,missingSince=0,lastDetail='';
       while(!disposed&&!job.cancelled&&Date.now()<job.deadline){
-        const expected=job.expectedUrl||conversationUrl(cp.url);
+        const expected=job.expectedUrl;
         if(expected&&conversationUrl(location.href)!==expected)throw new Error('网页导航到了其他会话，已停止采集');
         const list=users(),index=core.locateUser(list,cp,job.task.message);
         if(index<0){
@@ -275,8 +276,9 @@
         }
         missingSince=0;
         if(index!==list.length-1)throw new Error('工作标签页出现另一条用户消息，当前采集已中断，以免混入其他回复');
-        if(cp.userKey!==list[index].key||cp.url!==location.href){
-          cp.userKey=list[index].key;cp.url=location.href;cp.phase='observing';
+        const durableUrl=stableConversationUrl(location.href);
+        if(cp.userKey!==list[index].key||(durableUrl&&cp.url!==durableUrl)){
+          cp.userKey=list[index].key;if(durableUrl)cp.url=durableUrl;cp.phase='observing';
           await emit(job,'checkpoint',{checkpoint:cp});
         }
         const nodes=assistantAfter(list[index].node),newest=nodes.at(-1);

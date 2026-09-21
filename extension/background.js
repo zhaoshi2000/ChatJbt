@@ -1,7 +1,7 @@
 import {DEFAULT_URL,VERSION,TERMINAL,normalizeBaseUrl,apiRequest} from './shared.js';
-import {chatUrl,conversationUrl,validId,assertTask,assertPacket,planTaskIds} from './lane-core.js';
+import {chatUrl,conversationUrl,stableConversationUrl,pageAtTarget,validId,assertTask,assertPacket,planTaskIds} from './lane-core.js';
 const storage=chrome.storage.local, PREFIX='lane:', ACCOUNT_TAB='accountWorkTab', ALARM='doubao-multi-recover';
-const CONTENT_REVISION='2026-09-21.1';
+const CONTENT_REVISION='2026-09-21.2';
 const get=async key=>(await storage.get(key))[key];
 const write=value=>storage.set(value);
 const locks=new Map();
@@ -43,7 +43,7 @@ async function readImage(url){
 function kick(delay=0){if(cyclePromise){if(delay===0)rerun=true;return;}clearTimeout(timer);timer=setTimeout(()=>runCycle().catch(()=>{}),delay);}
 const pause=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 async function ping(tabId){let timeout;try{return await Promise.race([chrome.tabs.sendMessage(tabId,{type:'jsc-ping'}),new Promise((_,reject)=>{timeout=setTimeout(()=>reject(new Error('页面响应超时')),3000);})]);}catch{return null;}finally{clearTimeout(timeout);}}
-async function ensureContent(tabId,waitMs=60_000){
+async function ensureContent(tabId,waitMs=60_000,targetUrl=''){
   const deadline=Date.now()+waitMs;let tab,lastInfo,reloaded=false,injectionFailures=0;
   while(Date.now()<deadline){
     tab=await chrome.tabs.get(tabId);
@@ -59,7 +59,7 @@ async function ensureContent(tabId,waitMs=60_000){
         // once so the manifest content scripts attach to the new extension world.
         if(!info&&!reloaded&&injectionFailures>=2){await chrome.tabs.reload(tabId).catch(()=>{});reloaded=true;await pause(500);continue;}
       }
-      if(info?.ok&&info.version===VERSION&&info.revision===CONTENT_REVISION){lastInfo=info;if(info.composer)return {tab,info};}
+      if(info?.ok&&info.version===VERSION&&info.revision===CONTENT_REVISION){lastInfo=info;if(targetUrl&&!pageAtTarget(info.href||url,targetUrl)){lastInfo={...info,detail:'等待工作页切换到目标会话…'};await pause(250);continue;}if(info.composer)return {tab,info};}
     }else if(tab.status==='complete'&&url&&!/^(edge|chrome):\/\/newtab/.test(url))throw new Error('工作标签页没有进入 ChatGPT，请检查登录或站点权限');
     await pause(250);
   }
@@ -84,24 +84,31 @@ async function accountWorkTab(config,lane){
   }
   await write({[ACCOUNT_TAB]:shared});return {shared,tab};
 }
-async function ensureLane(conversationId,{focus=false}={}) {
+async function ensureLane(conversationId,options={}) {
   const config=await settings();if(!config.accountId)throw new Error('请先使用账号专属令牌配对');
+  return ordered('account-tab:'+config.accountId,()=>ensureLaneUnlocked(config,conversationId,options));
+}
+async function ensureLaneUnlocked(config,conversationId,{focus=false}={}) {
   if(!validId(conversationId))throw new Error('请先新建一个本地会话');
   const conversation=await request('/api/conversations/'+conversationId);
   if(conversation.accountId!==config.accountId)throw new Error('此会话不属于当前浏览器绑定的账号');
   let lane=await loadLane(conversationId)||{conversationId,accountId:config.accountId,bridge:null,active:null,detail:''};
   if(lane.accountId!==config.accountId)throw new Error('旧工作区绑定与本账号不同，拒绝复用');
-  const expected=conversationUrl(conversation.upstreamUrl)||conversationUrl(lane.active?.checkpoint?.url);
+  // ChatGPT briefly uses /c/WEB:* while creating a conversation and then
+  // replaces it with the durable conversation URL. Never lock a lane to that
+  // provisional address.
+  const expected=stableConversationUrl(conversation.upstreamUrl)||stableConversationUrl(lane.active?.checkpoint?.url);
   let {shared,tab}=await accountWorkTab(config,lane);
   if(lane.active?.task.submitted&&!expected&&shared.currentConversationId!==conversationId)throw new Error('原提交没有确认会话地址，无法安全恢复。请停止此任务并到原网页核对，不会重复发送。');
   const switching=shared.currentConversationId!==conversationId;
   if(switching){tab=await chrome.tabs.update(tab.id,{url:expected||'https://chatgpt.com/'});shared={...shared,currentConversationId:conversationId,documentKey:null};await write({[ACCOUNT_TAB]:shared});}
   if(tab?.discarded)await chrome.tabs.reload(tab.id).catch(()=>{});
   if(focus){await chrome.tabs.update(tab.id,{active:true});await chrome.windows.update(tab.windowId,{focused:true}).catch(()=>{});}
-  const bound=await ensureContent(tab.id), actual=conversationUrl(bound.info.href||bound.tab.url);
+  const targetUrl=switching?(expected||'https://chatgpt.com/'):'';
+  const bound=await ensureContent(tab.id,60_000,targetUrl), actual=conversationUrl(bound.info.href||bound.tab.url);
   if(expected&&actual!==expected)throw new Error('工作网页地址与本地会话不一致，已阻止串聊。请恢复原对话地址：'+expected);
   if(!expected&&!switching&&!lane.active?.task.submitted&&(actual||bound.info.userCount>0))throw new Error('新建会话的工作页已有其他聊天内容。请点击“新对话”后重试，不会接管已有对话。');
-  if(lane.active?.task.submitted&&lane.bridge.documentKey&&lane.bridge.documentKey!==bound.info.documentKey&&!expected)
+  if(lane.active?.task.submitted&&lane.bridge.documentKey&&lane.bridge.documentKey!==bound.info.documentKey&&!expected&&!actual)
     throw new Error('提交后的页面已被替换，且没有安全恢复地址。请停止并核对原网页。');
   lane.bridge={...lane.bridge,tabId:tab.id,documentKey:bound.info.documentKey,url:bound.info.href||bound.tab.url};
   await write({[ACCOUNT_TAB]:{...shared,tabId:tab.id,currentConversationId:conversationId,documentKey:bound.info.documentKey}});
@@ -236,6 +243,11 @@ async function uiOperation(message,sender,isInternal=false){
     if(other){
       if(other.bridge?.tabId){await chrome.tabs.update(other.bridge.tabId,{active:true}).catch(()=>{});const tab=await chrome.tabs.get(other.bridge.tabId).catch(()=>null);if(tab)await chrome.windows.update(tab.windowId,{focused:true}).catch(()=>{});}
       return {ok:true,ready:false,tabId:other.bridge?.tabId,detail:'此账号的唯一工作页正在处理另一会话；当前任务会自动排队'};
+    }
+    const taskList=await request('/api/tasks'),queuedOther=taskList.tasks.find(t=>!TERMINAL.has(t.state)&&t.conversationId!==message.conversationId);
+    if(queuedOther){
+      const shared=await get(ACCOUNT_TAB);if(shared?.tabId){await chrome.tabs.update(shared.tabId,{active:true}).catch(()=>{});const tab=await chrome.tabs.get(shared.tabId).catch(()=>null);if(tab)await chrome.windows.update(tab.windowId,{focused:true}).catch(()=>{});}
+      return {ok:true,ready:false,tabId:shared?.tabId,detail:'此账号已有其他会话排队或处理中；不会切走唯一工作页'};
     }
     const result=await ordered(message.conversationId,()=>ensureLane(message.conversationId,{focus:op!=='ui-prepare-bridge'}));
     kick();

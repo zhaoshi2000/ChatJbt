@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
 import {webcrypto} from 'node:crypto';
-const ID='a'.repeat(32),ORIGIN=`chrome-extension://${ID}/`,TOKEN='b'.repeat(43),VERSION='1.2.0',CONTENT_REVISION='2026-09-21.1';
+const ID='a'.repeat(32),ORIGIN=`chrome-extension://${ID}/`,TOKEN='b'.repeat(43),VERSION='1.2.0',CONTENT_REVISION='2026-09-21.2';
 const ACCOUNT='account-aaaaaaaa',CLIENT='client-aaaaaaaa',C1='conversation-1111',C2='conversation-2222';
 const source=['extension/shared.js','extension/lane-core.js','extension/background.js'].map(p=>fs.readFileSync(new URL('../'+p,import.meta.url),'utf8').replace(/^import .*\n/gm,'').replaceAll('export ','')).join('\n');
 const clone=x=>x===undefined?undefined:structuredClone(x);
@@ -69,6 +69,9 @@ test('queued second conversation cannot overlap the active account work tab',asy
  const h=harness();await h.cycle();assert.ok(h.saved['lane:'+C1].active);assert.equal(h.saved['lane:'+C2],undefined);
  assert.equal(h.counters.runs.filter(x=>x.packet.task.conversationId===C1).length,1);assert.equal(h.counters.runs.filter(x=>x.packet.task.conversationId===C2).length,0);
 });
+test('manual open cannot navigate the shared tab away from another queued conversation',async()=>{
+ const h=harness();const result=await h.web('ui-open-bridge',{conversationId:C2});assert.equal(result.ok,true);assert.equal(result.ready,false);assert.match(result.detail,/不会切走/);assert.equal(h.counters.creates.length,0);
+});
 test('foreign tab, document, account, conversation and iframe packets are rejected',async()=>{
  const h=harness();await h.cycle();const base=h.packet(C1);
  for(const patch of [{accountId:'account-bbbbbbbb'},{documentKey:'old-document'},{conversationId:C2},{id:'other-task000'}])assert.equal((await h.content({...base,...patch})).ok,false);
@@ -90,6 +93,10 @@ test('discarded work tab is automatically reloaded instead of requiring a manual
 test('uncertain submitted task is never blindly sent to a replacement blank tab',async()=>{
  const h=harness();await h.cycle();const lane=h.saved['lane:'+C1];lane.active.task.submitted=true;h.tasks[0].submitted=true;h.tabs.delete(lane.bridge.tabId);
  const count=h.counters.runs.length;await h.cycle();assert.match(h.saved['lane:'+C1].detail,/无法安全恢复/);assert.equal(h.counters.runs.filter(x=>x.packet.task.conversationId===C1).length,1);assert.ok(h.counters.runs.length>=count);
+});
+test('submitted task reattaches after extension reload when managed tab reached a real conversation',async()=>{
+ const h=harness();await h.cycle();const lane=h.saved['lane:'+C1],id=lane.bridge.tabId,url='https://chatgpt.com/c/WEB:recover-one';lane.active.task.submitted=true;lane.active.checkpoint={phase:'submitting',url:'https://chatgpt.com/'};h.tasks[0].submitted=true;h.tabs.get(id).url=url;Object.assign(h.pages.get(id),{href:url,userCount:1,documentKey:'reloaded-doc'});
+ const before=h.counters.runs.length;await h.cycle();assert.equal(h.counters.runs.length,before+1);assert.equal(h.counters.runs.at(-1).packet.task.submitted,true);assert.equal(h.saved['lane:'+C1].bridge.documentKey,'reloaded-doc');
 });
 test('a tracked work tab that leaves ChatGPT is replaced without adopting a manual chat',async()=>{
  const h=harness();await h.cycle();const lane=h.saved['lane:'+C1],old=lane.bridge.tabId;h.tabs.get(old).url='https://example.org/';
