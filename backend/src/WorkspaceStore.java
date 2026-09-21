@@ -76,18 +76,19 @@ final class WorkspaceStore {
     }
     synchronized Map<String,Object> conversation(String id){var c=conversations.get(id);if(c==null)throw new TaskStore.Missing("会话不存在");return new LinkedHashMap<>(c);}
     synchronized Map<String,Object> scopedConversation(Principal p,String id){var c=conversation(id);if(!p.admin&&!p.accountId.equals(Json.str(c,"accountId","")))throw new TaskStore.Missing("会话不存在");return c;}
-    synchronized List<Map<String,Object>> listConversations(Principal p){return conversations.values().stream().filter(c->p.admin||p.accountId.equals(Json.str(c,"accountId",""))).sorted(Comparator.comparingLong((Map<String,Object> c)->Json.num(c,"updated",0)).reversed()).map(c->(Map<String,Object>)new LinkedHashMap<>(c)).toList();}
+    synchronized List<Map<String,Object>> listConversations(Principal p){return conversations.values().stream().filter(c->p.admin||p.accountId.equals(Json.str(c,"accountId",""))).sorted(Comparator.comparing((Map<String,Object> c)->Json.bool(c,"pinned",false)).reversed().thenComparing(Comparator.comparingLong((Map<String,Object> c)->Json.num(c,Json.bool(c,"pinned",false)?"pinnedAt":"updated",0)).reversed())).map(c->(Map<String,Object>)new LinkedHashMap<>(c)).toList();}
     synchronized Map<String,Object> createConversation(String accountId,String id,String title)throws IOException {
         account(accountId);validId(id);title=title.trim();if(title.isEmpty())title="新对话";if(title.length()>100)throw new IllegalArgumentException("标题最多 100 字符");
         if(conversations.containsKey(id)){var c=conversation(id);if(!accountId.equals(Json.str(c,"accountId","")))throw new TaskStore.Missing("会话不存在");return c;}
         if(conversations.values().stream().filter(c->accountId.equals(Json.str(c,"accountId",""))).count()>=2000)throw new TaskStore.Conflict("此账号会话过多，请导出并删除部分记录");
-        long now=System.currentTimeMillis();var c=Json.map("id",id,"accountId",accountId,"title",title,"created",now,"updated",now,"upstreamUrl","","blocked",false,"blockReason","");
+        long now=System.currentTimeMillis();var c=Json.map("id",id,"accountId",accountId,"title",title,"created",now,"updated",now,"pinned",false,"pinnedAt",0,"upstreamUrl","","blocked",false,"blockReason","");
         conversations.put(id,c);try{save();}catch(IOException e){conversations.remove(id);throw e;}return new LinkedHashMap<>(c);
     }
     synchronized void rename(String id,String title)throws IOException {
         title=title.trim();if(title.isEmpty()||title.length()>100)throw new IllegalArgumentException("标题需为 1–100 字符");
         update(id,Json.map("title",title,"updated",System.currentTimeMillis()));
     }
+    synchronized void pin(String id,boolean pinned)throws IOException {update(id,Json.map("pinned",pinned,"pinnedAt",pinned?System.currentTimeMillis():0));}
     synchronized void touch(String id)throws IOException {update(id,Json.map("updated",System.currentTimeMillis()));}
     synchronized void update(String id,Map<String,Object> values)throws IOException {
         var old=conversation(id);conversations.get(id).putAll(values);try{save();}catch(IOException e){conversations.put(id,old);throw e;}

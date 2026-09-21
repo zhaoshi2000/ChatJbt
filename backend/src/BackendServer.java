@@ -134,7 +134,7 @@ public final class BackendServer {
                     if(p.length==2&&p[1].equals("tasks")){require(method,"GET");send(x,200,Json.map("conversation",c,"tasks",store.list(Json.str(c,"accountId",""),p[0],true)));return;}
                     if(p.length!=1)throw new TaskStore.Missing("接口不存在");
                     if(method.equals("DELETE")){store.deleteConversation(p[0]);workspaces.delete(p[0]);send(x,200,Json.map("ok",true));return;}
-                    if(method.equals("POST")){var m=body(x);workspaces.rename(p[0],Json.str(m,"title",""));send(x,200,workspaces.conversation(p[0]));return;}
+                    if(method.equals("POST")){var m=body(x);if(m.containsKey("title"))workspaces.rename(p[0],Json.str(m,"title",""));if(m.containsKey("pinned"))workspaces.pin(p[0],Json.bool(m,"pinned",false));if(!m.containsKey("title")&&!m.containsKey("pinned"))throw new IllegalArgumentException("需要 title 或 pinned");send(x,200,workspaces.conversation(p[0]));return;}
                     require(method,"GET");send(x,200,c);return;
                 }
             }

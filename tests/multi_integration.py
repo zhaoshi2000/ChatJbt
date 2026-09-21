@@ -179,6 +179,22 @@ class IsolationTests(unittest.TestCase):
             code,model_task=self.b.call('POST','/api/tasks',{'conversationId':self.c['id'],'requestId':str(uuid.uuid4()),'message':'指定模型','model':selected},self.a['token'])
             self.assertEqual(code,202);self.assertEqual(model_task['model'],selected);self.b.call('POST','/api/tasks/'+model_task['id']+'/cancel',{},self.a['token'])
         self.assertEqual(self.b.call('POST','/api/tasks',{'conversationId':self.c['id'],'requestId':str(uuid.uuid4()),'message':'bad model','model':'unknown-model'},self.a['token'])[0],400)
+class ConversationPinTests(unittest.TestCase):
+    def test_pin_is_scoped_persisted_and_sorted_first(self):
+        b=Backend()
+        try:
+            a=b.account('置顶账号');z=b.account('其他账号');c=b.conv(a,'较早会话');b.conv(a,'较新的普通会话')
+            code,pinned=b.call('POST','/api/conversations/'+c['id'],{'pinned':True},a['token'])
+            self.assertEqual(code,200);self.assertTrue(pinned['pinned']);self.assertGreater(pinned['pinnedAt'],0)
+            listed=b.call('GET','/api/conversations',token=a['token'])[1]['conversations']
+            self.assertEqual(listed[0]['id'],c['id'])
+            self.assertEqual(b.call('POST','/api/conversations/'+c['id'],{'pinned':False},z['token'])[0],404)
+            b.close();b.start()
+            restored=b.call('GET','/api/conversations/'+c['id'],token=a['token'])[1]
+            self.assertTrue(restored['pinned'])
+            code,unpinned=b.call('POST','/api/conversations/'+c['id'],{'pinned':False},a['token'])
+            self.assertEqual(code,200);self.assertFalse(unpinned['pinned'])
+        finally:b.cleanup()
 class MigrationTests(unittest.TestCase):
     def test_legacy_is_read_only_not_assigned_to_new_accounts(self):
         with tempfile.TemporaryDirectory() as d:

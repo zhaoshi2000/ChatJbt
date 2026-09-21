@@ -25,6 +25,13 @@ test('completion requires nonempty stable text and a turn completion action',()=
   assert.equal(core.mayComplete({text:'   ',busy:false,searching:false,completionAction:true,stableMs:30000}),false);
   assert.equal(core.mayComplete({text:'',hasMedia:true,busy:false,searching:false,completionAction:true,stableMs:8000}),true);
 });
+test('a loaded generated image overrides only stale aria-busy state',()=>{
+  assert.equal(core.responseBusy({ariaBusy:true,mediaReady:true}),false);
+  assert.equal(core.responseBusy({ariaBusy:true,mediaReady:false}),true);
+  assert.equal(core.responseBusy({stop:true,ariaBusy:true,mediaReady:true}),true);
+  assert.equal(core.responseBusy({thinking:true,mediaReady:true}),true);
+  assert.equal(core.responseBusy({searching:true,mediaReady:true}),true);
+});
 test('recovery identifies repeated prompts by stable message id',()=>{
   const users=[{key:'id:old',text:'重复问题'},{key:'id:new',text:'重复问题'}];
   assert.equal(core.locateUser(users,{baselineKeys:['id:old']},'重复问题'),1);

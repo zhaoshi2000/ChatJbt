@@ -5,6 +5,9 @@
   function mayComplete({text, hasMedia=false, busy, searching, completionAction, stableMs, settleMs = 8000}) {
     return (!!normalize(text)||hasMedia) && !busy && !searching && !!completionAction && stableMs >= settleMs;
   }
+  function responseBusy({stop=false,searching=false,thinking=false,ariaBusy=false,mediaReady=false}) {
+    return !!stop||!!searching||!!thinking||(!!ariaBusy&&!mediaReady);
+  }
   function locateUser(users, checkpoint, message) {
     if (checkpoint.userKey) {
       const exact = users.findIndex(u => u.key === checkpoint.userKey && normalize(u.text) === normalize(message));
@@ -18,5 +21,5 @@
     }
     return -1;
   }
-  globalThis.JSCBridgeCore = Object.freeze({normalize,hash,mayComplete,locateUser});
+  globalThis.JSCBridgeCore = Object.freeze({normalize,hash,mayComplete,responseBusy,locateUser});
 })();

@@ -130,7 +130,12 @@
     const statuses=Array.from(region.querySelectorAll('[role="status"], [data-testid="thinking-status"], [data-testid="web-search-status"]')).filter(visible).map(elementText).join(' ');
     const searching=/searching|browsing|搜索中|正在搜索|正在检索|正在浏览/i.test(statuses);
     const thinking=/thinking|思考中|正在思考/i.test(statuses);
-    const busy=!!stopButton()||!!Array.from(region.querySelectorAll('[aria-busy="true"]')).find(visible)||searching||thinking;
+    // Image cards can keep a stale aria-busy flag after the full-resolution image
+    // and response actions are already available. A loaded image is the reliable
+    // completion signal in that case; the global stop/search/thinking controls still win.
+    const mediaReady=node instanceof HTMLImageElement&&node.complete&&node.naturalWidth>=128&&node.naturalHeight>=128;
+    const ariaBusy=!!Array.from(region.querySelectorAll('[aria-busy="true"]')).find(visible);
+    const busy=core.responseBusy({stop:!!stopButton(),searching,thinking,ariaBusy,mediaReady});
     return {searching,busy,detail:searching?'ChatGPT 正在搜索，请保持工作标签页打开':thinking?'ChatGPT 正在思考':busy?'ChatGPT 正在生成':'等待明确的回复完成标记'};
   }
   async function message(value) {
