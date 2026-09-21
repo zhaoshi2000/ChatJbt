@@ -1,9 +1,17 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import {VERSION,BACKEND_VERSION,browserQueueHint,normalizeBaseUrl,parseSse,taskMarkdown,TERMINAL} from '../extension/shared.js';
 import {conversationUrl,stableConversationUrl,pageAtTarget} from '../extension/lane-core.js';
 import '../extension/bridge-core.js';
 const core=globalThis.JSCBridgeCore;
+
+test('chat input sends on Enter and conversation deletion confirms in place',()=>{
+  const app=fs.readFileSync(new URL('../web/app.js',import.meta.url),'utf8');
+  assert.match(app,/e\.key==='Enter'&&!e\.shiftKey/);
+  assert.match(app,/confirmHistoryDelete/);
+  assert.doesNotMatch(app,/confirm\(['"]删除/);
+});
 
 test('normalizes IPv4 loopback and localhost without IPv6 ambiguity',()=>{
   assert.equal(normalizeBaseUrl(' http://localhost:48627/ '),'http://127.0.0.1:48627');
