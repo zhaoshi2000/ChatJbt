@@ -285,13 +285,13 @@ public final class BackendServer {
             x.getResponseHeaders().set("Location","/web/");x.sendResponseHeaders(302,-1);return;
         }
         String name=path.equals("/web/")?"app.html":path.startsWith("/web/")?path.substring(5):path.substring(1);
-        if(!Set.of("app.html","app.css","app.js","shared.js","web-rpc.js","render.js","icon.svg").contains(name)){send(x,404,Json.map("error","Not found"));return;}
+        if(!Set.of("app.html","app.css","app.js","shared.js","web-rpc.js","render.js","icon.svg","avatar.png").contains(name)){send(x,404,Json.map("error","Not found"));return;}
         InputStream stream=BackendServer.class.getResourceAsStream("/ui/"+name);
         if(stream==null){Path file=Path.of("web",name);if(Files.isRegularFile(file))stream=Files.newInputStream(file);}
         if(stream==null){send(x,404,Json.map("error","UI assets missing; run build.bat"));return;}
         byte[] bytes;try(InputStream in=stream){bytes=in.readAllBytes();}
-        String type=name.endsWith(".css")?"text/css":name.endsWith(".js")?"text/javascript":name.endsWith(".svg")?"image/svg+xml":"text/html";
-        x.getResponseHeaders().set("Content-Type",type+"; charset=utf-8");
+        String type=name.endsWith(".css")?"text/css":name.endsWith(".js")?"text/javascript":name.endsWith(".svg")?"image/svg+xml":name.endsWith(".png")?"image/png":"text/html";
+        x.getResponseHeaders().set("Content-Type",type+(type.startsWith("text/")||type.endsWith("svg+xml")?"; charset=utf-8":""));
         x.getResponseHeaders().set("Content-Security-Policy","default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
         x.sendResponseHeaders(200,bytes.length);x.getResponseBody().write(bytes);
     }
