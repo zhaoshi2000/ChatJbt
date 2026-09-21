@@ -1,7 +1,7 @@
 import {DEFAULT_URL,VERSION,TERMINAL,normalizeBaseUrl,apiRequest} from './shared.js';
 import {chatUrl,conversationUrl,stableConversationUrl,pageAtTarget,validId,assertTask,assertPacket,planTaskIds} from './lane-core.js';
 const storage=chrome.storage.local, PREFIX='lane:', ACCOUNT_TAB='accountWorkTab', ALARM='doubao-multi-recover';
-const CONTENT_REVISION='2026-09-21.8';
+const CONTENT_REVISION='2026-09-21.10';
 const get=async key=>(await storage.get(key))[key];
 const write=value=>storage.set(value);
 const locks=new Map();
@@ -19,15 +19,22 @@ const boot=(async()=>{
   let saved=await storage.get(['clientId','settings']);
   if(!saved.clientId)await write({clientId:crypto.randomUUID()});
   if(!saved.settings)await write({settings:{backendUrl:DEFAULT_URL,token:'',enabled:true,accountId:''}});
-  // Tab IDs are only meaningful for the current browser lifetime. Never trust
-  // a persisted numerical ID after browser restart or extension reload.
+  // A manual extension reload clears session storage while the browser tabs
+  // stay alive. Reuse only a tab whose current durable conversation URL still
+  // exactly matches the recorded lane; otherwise discard the numerical ID.
   const session=await chrome.storage.session.get('doubaoSession');
   if(!session.doubaoSession){
+    const retained=new Set();
     for(const lane of await allLanes()){
-      if(lane.bridge)lane.bridge={...lane.bridge,tabId:null,documentKey:null};
+      if(lane.bridge?.tabId){
+        let tab=null;try{tab=await chrome.tabs.get(lane.bridge.tabId);}catch{}
+        const actual=stableConversationUrl(tab?.url||tab?.pendingUrl||''),recorded=stableConversationUrl(lane.bridge.url)||stableConversationUrl(lane.active?.checkpoint?.url);
+        const safe=!!tab&&chatUrl(tab.url||tab.pendingUrl)&&((recorded&&actual===recorded)||(!lane.active?.task.submitted&&!recorded));
+        if(safe)retained.add(lane.bridge.tabId);else lane.bridge={...lane.bridge,tabId:null,documentKey:null};
+      }
       await saveLane(lane);
     }
-    await write({[ACCOUNT_TAB]:null});
+    const shared=await get(ACCOUNT_TAB);if(!retained.has(shared?.tabId))await write({[ACCOUNT_TAB]:null});
     await chrome.storage.session.set({doubaoSession:crypto.randomUUID()});
   }
   if(!(await chrome.alarms.get(ALARM)))await chrome.alarms.create(ALARM,{periodInMinutes:0.5});
@@ -40,10 +47,10 @@ async function readImage(url){
   const bytes=new Uint8Array(await blob.arrayBuffer());let binary='';for(let i=0;i<bytes.length;i+=0x8000)binary+=String.fromCharCode(...bytes.subarray(i,i+0x8000));
   return {ok:true,mimeType:['image/png','image/jpeg','image/webp','image/gif'].includes(blob.type)?blob.type:'image/png',base64:btoa(binary)};
 }
-async function resolveGeneratedFile(source,tabId,senderUrl){
+async function resolveGeneratedFile(source,tabId,pageUrl){
   if(typeof source.url==='string'&&source.url)return source;
   if(!Number.isInteger(tabId)||typeof source.conversation!=='string'||typeof source.messageId!=='string'||typeof source.sandboxPath!=='string'||!/^\/mnt\/data\/[^/\\]{1,160}$/.test(source.sandboxPath))throw new Error('生成文件解析信息无效');
-  const page=conversationUrl(senderUrl);if(page!=='https://chatgpt.com/c/'+source.conversation)throw new Error('生成文件会话与工作页不匹配');
+  const page=conversationUrl(pageUrl);if(page!=='https://chatgpt.com/c/'+source.conversation)throw new Error('生成文件会话与工作页不匹配');
   const endpoint='/backend-api/conversation/'+encodeURIComponent(source.conversation)+'/interpreter/download?message_id='+encodeURIComponent(source.messageId)+'&sandbox_path='+encodeURIComponent(source.sandboxPath);
   const executed=await chrome.scripting.executeScript({target:{tabId,frameIds:[0]},world:'MAIN',func:async ({path,fileName})=>{const parse=async response=>{const data=await response.clone().json().catch(()=>({}));return {ok:response.ok,status:response.status,downloadUrl:data.download_url||'',fileName:data.file_name||'',mimeType:data.mime_type||''};};try{const target=new URL(path,location.href),headers={'x-chatgpt-sandbox-download-source':'web_artifact_download','x-openai-target-path':target.pathname,'x-openai-target-route':'/backend-api/conversation/{conversation_id}/interpreter/download','x-openai-web-frontend':'core_web','oai-language':document.documentElement.lang||navigator.language||'zh-CN'},direct=await fetch(target.href,{credentials:'include',cache:'no-store',headers}),value=await parse(direct);if(value.ok)return value;
     const originalFetch=window.fetch,originalClick=HTMLAnchorElement.prototype.click,originalOpen=window.open;let finish;const captured=new Promise(resolve=>finish=resolve),timer=setTimeout(()=>finish({ok:false,status:value.status}),12_000);
@@ -52,10 +59,10 @@ async function resolveGeneratedFile(source,tabId,senderUrl){
     const norm=value=>String(value||'').replace(/\s+/g,' ').trim(),buttons=Array.from(document.querySelectorAll('button,[role="button"]')),wanted=norm(fileName),button=buttons.find(el=>{const label=norm(el.getAttribute('aria-label')||el.getAttribute('title')||el.innerText||el.textContent);return label===wanted||(/^(?:下载|download)\s+/i.test(label)&&label.includes(wanted));});if(!button)finish({ok:false,status:404,error:'未找到文件卡片'});else button.click();const result=await captured;clearTimeout(timer);window.fetch=originalFetch;HTMLAnchorElement.prototype.click=originalClick;window.open=originalOpen;return result;}catch(error){return {ok:false,status:0,error:error?.message||String(error)};}},args:[{path:endpoint,fileName:source.name}]});
   const value=executed?.[0]?.result;if(!value?.ok)throw new Error('获取生成文件下载地址失败：HTTP '+(value?.status||0));return {...source,url:value.downloadUrl,name:(value.fileName||source.name),mimeType:value.mimeType||source.mimeType};
 }
-async function uploadGeneratedFile(task,source,tabId,senderUrl){
-  if(!source||typeof source.name!=='string'||typeof source.key!=='string'||source.name.length>160)throw new Error('生成文件信息无效');source=await resolveGeneratedFile(source,tabId,senderUrl);
+async function uploadGeneratedFile(task,source,tabId,pageUrl){
+  if(!source||typeof source.name!=='string'||typeof source.key!=='string'||source.name.length>160)throw new Error('生成文件信息无效');source=await resolveGeneratedFile(source,tabId,pageUrl);
   const remote=new URL(source.url);if(remote.protocol!=='https:'||remote.hostname!=='chatgpt.com'||remote.pathname!=='/backend-api/estuary/content')throw new Error('生成文件地址不安全');
-  const response=await fetch(remote.href,{cache:'no-store',credentials:'include',referrer:senderUrl,referrerPolicy:'strict-origin-when-cross-origin'});if(!response.ok)throw new Error('下载 ChatGPT 生成文件失败：HTTP '+response.status);
+  const response=await fetch(remote.href,{cache:'no-store',credentials:'include',referrer:pageUrl,referrerPolicy:'strict-origin-when-cross-origin'});if(!response.ok)throw new Error('下载 ChatGPT 生成文件失败：HTTP '+response.status);
   const blob=await response.blob();if(!blob.size)throw new Error('ChatGPT 返回了空文件');if(blob.size>50_000_000)throw new Error('生成文件超过 50 MB，未自动保存');
   const config=await settings(),clientId=await get('clientId'),hash=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(source.key)))).map(v=>v.toString(16).padStart(2,'0')).join('');
   const saved=await fetch(config.backendUrl+'/api/browser/files/'+encodeURIComponent(task.id),{method:'POST',headers:{Authorization:'Bearer '+config.token,'Content-Type':blob.type||source.mimeType||'application/octet-stream','X-Doubao-Client':clientId,'X-Doubao-Lease':task.lease,'X-Doubao-File-Key':hash,'X-Doubao-File-Name':encodeURIComponent(source.name)},body:blob,credentials:'omit',redirect:'error'});
@@ -149,7 +156,7 @@ async function forwardEvent(packet,sender){
     lane=await flush(lane);const a=lane.active;
     if(a.lastAck===packet.eventId||TERMINAL.has(a.task.state))return {ok:true,state:a.task.state,terminal:TERMINAL.has(a.task.state)};
     if(!['checkpoint','submitting','snapshot','progress','done','error','interrupted'].includes(packet.eventType)||typeof packet.eventId!=='string'||packet.eventId.length>100)throw new Error('无效事件类型');
-    if(packet.fileSources!==undefined){if(packet.eventType!=='done'||!Array.isArray(packet.fileSources)||packet.fileSources.length>4)throw new Error('生成文件回传无效');for(const source of packet.fileSources)await uploadGeneratedFile(a.task,source,sender.tab?.id,sender.url);}
+    if(packet.fileSources!==undefined){if(packet.eventType!=='done'||!Array.isArray(packet.fileSources)||packet.fileSources.length>4)throw new Error('生成文件回传无效');const pageUrl=packet.checkpoint?.url||a.checkpoint?.url||sender.url;for(const source of packet.fileSources)await uploadGeneratedFile(a.task,source,sender.tab?.id,pageUrl);}
     a.checkpoint={...a.checkpoint,...packet.checkpoint};
     a.pending={id:a.task.id,accountId:lane.accountId,conversationId:lane.conversationId,clientId:await get('clientId'),lease:a.task.lease,seq:a.seq+1,eventId:packet.eventId,type:packet.eventType,checkpoint:a.checkpoint};
     if(typeof packet.text==='string')a.pending.text=packet.text.slice(0,1_000_000);
@@ -160,6 +167,19 @@ async function forwardEvent(packet,sender){
     await saveLane(lane);lane=await flush(lane);
     return {ok:true,state:lane.active.task.state,terminal:TERMINAL.has(lane.active.task.state)};
   });
+}
+const wakePulses=new Map();
+async function wakeHiddenWorkTab(packet,sender){
+  if(!validId(packet.conversationId))throw new Error('无效会话 ID');
+  const lane=await loadLane(packet.conversationId);assertPacket(packet,sender,lane);
+  const tabId=lane.bridge.tabId,now=Date.now(),last=wakePulses.get(tabId)||0;if(now-last<6000)return {ok:true,skipped:true};
+  const work=await chrome.tabs.get(tabId),visible=(await chrome.tabs.query({active:true,windowId:work.windowId}))[0];
+  if(!visible||visible.id===tabId)return {ok:true,alreadyVisible:true};
+  wakePulses.set(tabId,now);await chrome.tabs.update(tabId,{active:true});
+  await pause(2000);
+  const current=await chrome.tabs.get(tabId).catch(()=>null),previous=await chrome.tabs.get(visible.id).catch(()=>null);
+  if(current&&previous&&current.windowId===previous.windowId)await chrome.tabs.update(previous.id,{active:true}).catch(()=>{});
+  return {ok:true,woken:true};
 }
 async function release(lane,state){
   if(lane.bridge?.tabId&&lane.active)await chrome.tabs.sendMessage(lane.bridge.tabId,{type:'jsc-release',id:lane.active.task.id,state}).catch(()=>{});
@@ -235,7 +255,7 @@ async function pair(next){
       if((await allLanes()).some(l=>l.active)&&(old.token!==config.token||old.backendUrl!==config.backendUrl))throw new Error('仍有任务，先停止或等待完成后再修改连接');
       const me=await apiRequest(config,'/api/me');
       if(me.version!==VERSION)throw new Error('请同时更新后端和扩展到 '+VERSION);
-      if(me.role!=='account')throw new Error('管理员令牌不能直接桥接。请在逗包网页“账号管理”创建账号，使用返回的账号专属令牌');
+      if(me.role!=='account')throw new Error('管理员令牌不能直接桥接。请在 GBT 网页“账号管理”创建账号，使用返回的账号专属令牌');
       if(old.accountId&&old.accountId!==me.account.id)throw new Error('本浏览器配置文件已用于另一个账号。请新建独立浏览器配置文件，不能只换令牌冒充登录隔离');
       const registered=await apiRequest(config,'/api/bridge/register',{method:'POST',body:{clientId:await get('clientId'),confirmProfile:next.confirmProfile===true,profileLabel:String(next.profileLabel||me.account.name)}});
       await write({settings:{...config,accountId:me.account.id,accountName:me.account.name},maxConcurrent:registered.maxConcurrent});
@@ -292,12 +312,13 @@ chrome.runtime.onMessage.addListener((message,sender,respond)=>{
     if(sender.tab?.incognito)throw new Error('请使用独立浏览器配置文件；本版不使用无痕窗口共享账号状态');
     if(message?.type==='bridge-read-image'){if(sender.frameId!==0||!chatUrl(sender.url))throw new Error('不可信网页');return readImage(message.url);}
     if(message?.type==='bridge-event'){if(!chatUrl(sender.url))throw new Error('不可信网页');return forwardEvent(message,sender);}
+    if(message?.type==='bridge-wake-tab'){if(sender.frameId!==0||!chatUrl(sender.url))throw new Error('不可信网页');return wakeHiddenWorkTab(message,sender);}
     if(message?.type==='bridge-hello'){
       if(sender.frameId!==0||!chatUrl(sender.url))throw new Error('不可信网页');
       const shared=await get(ACCOUNT_TAB),lanes=await allLanes(),lane=lanes.find(l=>l.conversationId===shared?.currentConversationId&&l.bridge?.tabId===sender.tab?.id)||lanes.find(l=>l.active&&l.bridge?.tabId===sender.tab?.id);if(lane)kick();return {ok:true,bound:!!lane};
     }
-    if(message?.type==='doubao-web'){if(!await localPage(sender))throw new Error('拒绝非当前本机逗包地址的网页操作');return uiOperation(message,sender);}
-    if(!internal(sender))throw new Error('只有扩展设置或本机逗包网页可执行此操作');return uiOperation(message,sender,true);
+    if(message?.type==='doubao-web'){if(!await localPage(sender))throw new Error('拒绝非当前本机 GBT 地址的网页操作');return uiOperation(message,sender);}
+    if(!internal(sender))throw new Error('只有扩展设置或本机 GBT 网页可执行此操作');return uiOperation(message,sender,true);
   })().then(r=>respond(r||{ok:true})).catch(error=>respond({ok:false,error:error.message||String(error),retry:!!(error.status===0||error.status>=500)}));return true;
 });
 async function openWorkspace(){await boot;const config=await settings();try{const h=await apiRequest(config,'/health');if(h.version!==VERSION)throw new Error('版本不匹配');await chrome.tabs.create({url:normalizeBaseUrl(config.backendUrl)+'/web/',active:true});}catch{await chrome.tabs.create({url:chrome.runtime.getURL('options.html')});}}

@@ -1,7 +1,7 @@
 /* DOM adapter only. No cookies, browser session extraction, private ChatGPT APIs or remote code. */
 (() => {
   const VERSION='1.2.0';
-  const CONTENT_REVISION='2026-09-21.8';
+  const CONTENT_REVISION='2026-09-21.10';
   const documentKey=crypto.randomUUID();
   function conversationUrl(raw){try{const u=new URL(raw);return u.protocol==='https:'&&['chatgpt.com','chat.openai.com'].includes(u.hostname)&&/^\/(?:g\/[A-Za-z0-9_-]+\/)?c\/(?:WEB:)?[A-Za-z0-9_-]+$/.test(u.pathname)?'https://chatgpt.com'+u.pathname:'';}catch{return '';}}
   function stableConversationUrl(raw){const url=conversationUrl(raw);return url&&!/\/c\/WEB:/.test(url)?url:'';}
@@ -304,7 +304,8 @@
         if(disposed||job.cancelled)return;
         send.click();cp.phase='submitted';
       }
-      let lastText=job.task.text || '',lastMedia='',lastChange=Date.now(),lastPush=0,lastProgress=0,missingSince=0,lastDetail='';
+      const expectsFile=/\.(?:zip|rar|7z|tar|gz|txt|md|pdf|docx?|xlsx?|pptx?|csv|json|html?|css|js|ts|py|java)\b|(?:下载|源码|压缩包|文件)/i.test(job.task.message);
+      let lastText=job.task.text || '',lastMedia='',lastChange=Date.now(),lastPush=0,lastProgress=0,missingSince=0,lastDetail='',lastWakeKey='',fileWaitSince=0;
       while(!disposed&&!job.cancelled&&Date.now()<job.deadline){
         const expected=job.expectedUrl;
         if(expected&&conversationUrl(location.href)!==expected)throw new Error('网页导航到了其他会话，已停止采集');
@@ -323,7 +324,7 @@
         }
         const nodes=assistantAfter(list[index].node),newest=nodes.at(-1);
         const text=nodes.map(answerText).filter(Boolean).join('\n\n'),media=answerImages(newest,list[index].node),fileLinks=answerFileLinks(newest,list[index].node),downloads=answerFileActions(newest,list[index].node),mediaKey=[...media.map(img=>(img.currentSrc||img.src)+':'+img.naturalWidth+'x'+img.naturalHeight),...fileLinks.map(link=>link.getAttribute('href')||''),...downloads.map(file=>file.name)].join('|');
-        const responseNode=media.at(-1)||newest,progress=pageProgress(responseNode),now=Date.now();
+        const responseNode=media.at(-1)||newest,progress=pageProgress(responseNode),now=Date.now(),hasFile=fileLinks.length>0||downloads.length>0;
         if(text!==lastText){lastText=text;lastChange=now;}
         if(mediaKey!==lastMedia){lastMedia=mediaKey;lastChange=now;}
         if(now-lastPush>=500&&text!==job.lastPushedText){
@@ -333,7 +334,16 @@
         if(progress.detail!==lastDetail||now-lastProgress>12_000){
           await emit(job,'progress',{detail:progress.detail,checkpoint:cp});lastDetail=progress.detail;lastProgress=now;
         }
-        if(core.mayComplete({text,hasMedia:media.length>0||fileLinks.length>0||downloads.length>0,busy:progress.busy,searching:progress.searching,completionAction:completionAction(responseNode)||media.length>0||fileLinks.length>0||downloads.length>0,stableMs:now-lastChange})){
+        const completionReady=!!completionAction(responseNode),waitingForFile=expectsFile&&!!text&&!hasFile&&!progress.busy&&completionReady;
+        if(waitingForFile&&!fileWaitSince)fileWaitSince=now;
+        if(!waitingForFile)fileWaitSince=0;
+        const wakeKey=(waitingForFile?'file:':'stream:')+text+'\n'+mediaKey;
+        if(((progress.busy&&now-lastChange>=8000)||(waitingForFile&&now-fileWaitSince>=1500))&&wakeKey!==lastWakeKey){
+          lastWakeKey=wakeKey;
+          await message({type:'bridge-wake-tab',id:job.task.id,accountId:job.task.accountId,conversationId:job.task.conversationId,documentKey}).catch(()=>{});
+        }
+        const fileGraceExpired=waitingForFile&&now-fileWaitSince>=30_000;
+        if(core.mayComplete({text,hasMedia:media.length>0||hasFile,busy:progress.busy,searching:progress.searching,completionAction:completionReady||media.length>0||hasFile,stableMs:now-lastChange})&&(!waitingForFile||fileGraceExpired)){
           const images=await responseImages(media),fileSources=await responseFiles(fileLinks,newest,downloads);cp.phase='finished';await emit(job,'done',{text,images,fileSources,downloads:downloads.filter(file=>!fileSources.some(source=>source.name===file.name)),checkpoint:cp});return;
         }
         const turn=turnOf(newest);

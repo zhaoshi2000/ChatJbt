@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
 import {webcrypto} from 'node:crypto';
-const ID='a'.repeat(32),ORIGIN=`chrome-extension://${ID}/`,TOKEN='b'.repeat(43),VERSION='1.2.0',CONTENT_REVISION='2026-09-21.8';
+const ID='a'.repeat(32),ORIGIN=`chrome-extension://${ID}/`,TOKEN='b'.repeat(43),VERSION='1.2.0',CONTENT_REVISION='2026-09-21.10';
 const ACCOUNT='account-aaaaaaaa',CLIENT='client-aaaaaaaa',C1='conversation-1111',C2='conversation-2222';
 const source=['extension/shared.js','extension/lane-core.js','extension/background.js'].map(p=>fs.readFileSync(new URL('../'+p,import.meta.url),'utf8').replace(/^import .*\n/gm,'').replaceAll('export ','')).join('\n');
 const clone=x=>x===undefined?undefined:structuredClone(x);
@@ -14,12 +14,13 @@ function harness({saved={},session={doubaoSession:'browser-session'},server={}}=
  saved.clientId??=CLIENT;
  const tasks=server.tasks??=[C1,C2].map((c,i)=>({id:`task-0000000${i}`,accountId:ACCOUNT,conversationId:c,message:'测试 '+i,state:'queued',provider:'browser',created:Date.now()+i,text:'',lastSeq:0,submitted:false,lease:'lease-'+i,deadline:Date.now()+120000,checkpoint:{}}));
  const conversations=server.conversations??=Object.fromEntries([C1,C2].map(id=>[id,{id,accountId:ACCOUNT,title:id,upstreamUrl:''}]));
- const counters={creates:[],runs:[],requests:[],events:[],uploads:[],downloads:[],resolves:[],discards:[],reloads:[],injections:[],alarms:0,scheduled:[]};
+ const counters={creates:[],runs:[],requests:[],events:[],uploads:[],downloads:[],resolves:[],discards:[],reloads:[],injections:[],wakeMessages:[],alarms:0,scheduled:[]};
  const tabs=new Map([[10,{id:10,url:'https://chatgpt.com/c/manual',windowId:1,autoDiscardable:true,active:true}]]),pages=new Map();
  const messages=event(),removed=event();
  const makeStorage=obj=>({get:async keys=>keys===null?clone(obj):Object.fromEntries((Array.isArray(keys)?keys:[keys]).map(k=>[k,clone(obj[k])])),set:async patch=>Object.assign(obj,clone(patch)),remove:async key=>{for(const k of Array.isArray(key)?key:[key])delete obj[k];},setAccessLevel:async()=>{}});
  const chrome={storage:{local:makeStorage(saved),session:makeStorage(session)},runtime:{id:ID,getURL:p=>ORIGIN+p,onMessage:messages,onStartup:event(),onInstalled:event()},alarms:{get:async()=>null,create:async()=>{counters.alarms++;},onAlarm:event()},action:{onClicked:event(),setBadgeText:async()=>{}},windows:{update:async()=>{}},scripting:{executeScript:async spec=>{if(spec.world==='MAIN'){counters.resolves.push({tabId:spec.target.tabId,args:clone(spec.args)});return [{result:{ok:true,status:200,downloadUrl:'https://chatgpt.com/backend-api/estuary/content?id=resolved',fileName:'resolved.txt',mimeType:'text/plain'}}];}counters.injections.push(spec.target.tabId);const page=pages.get(spec.target.tabId);if(page){page.version=VERSION;page.revision=CONTENT_REVISION;}}},tabs:{onUpdated:event(),onRemoved:removed,
   get:async id=>{if(!tabs.has(id))throw Error('missing tab');return clone(tabs.get(id));},
+  query:async({active,windowId})=>Array.from(tabs.values()).filter(tab=>(active===undefined||tab.active===active)&&(windowId===undefined||tab.windowId===windowId)).map(clone),
   create:async({url,active})=>{const id=Math.max(...tabs.keys())+1,tab={id,url,active,windowId:1,autoDiscardable:true};tabs.set(id,tab);pages.set(id,{ok:true,version:VERSION,revision:CONTENT_REVISION,composer:true,busy:false,hasDraft:false,activeTask:null,documentKey:'doc-'+id,href:url,userCount:url.includes('/c/')?1:0,detail:'fixture ready'});counters.creates.push(id);return clone(tab);},
   reload:async id=>{if(!tabs.has(id))throw Error('missing');tabs.get(id).discarded=false;counters.reloads.push(id);return clone(tabs.get(id));},
   remove:async id=>{tabs.delete(id);pages.delete(id);},
@@ -89,9 +90,9 @@ test('completed reply downloads a signed ChatGPT artifact into the local backend
  const h=harness();await h.cycle();const packet=h.packet(C1,'源码已生成',{eventType:'done',fileSources:[{name:'forum.zip',mimeType:'application/zip',url:'https://chatgpt.com/backend-api/estuary/content?id=signed',key:'/mnt/data/forum.zip'}]});const result=await h.content(packet);
  assert.equal(result.ok,true);assert.equal(h.counters.uploads.length,1);assert.equal(h.counters.uploads[0].size,4);assert.match(h.counters.uploads[0].path,/\/api\/browser\/files\/task-/);assert.equal(h.tasks[0].state,'completed');
 });
-test('sandbox file card resolves its expiring URL in the ChatGPT main world and saves immediately',async()=>{
- const h=harness();await h.cycle();const lane=h.saved['lane:'+C1],tab=h.tabs.get(lane.bridge.tabId),upstream='upstream-1111';tab.url='https://chatgpt.com/c/'+upstream;h.pages.get(tab.id).href=tab.url;
- const packet=h.packet(C1,'文件已生成',{eventType:'done',fileSources:[{name:'server-auto.txt',mimeType:'application/octet-stream',conversation:upstream,messageId:'message-1111',sandboxPath:'/mnt/data/server-auto.txt',key:'/mnt/data/server-auto.txt'}]});const result=await h.content(packet);
+test('sandbox file card trusts the live checkpoint after ChatGPT SPA navigation and saves immediately',async()=>{
+ const h=harness();await h.cycle();const lane=h.saved['lane:'+C1],tab=h.tabs.get(lane.bridge.tabId),upstream='upstream-1111';tab.url='https://chatgpt.com/c/stale-before-spa-navigation';h.pages.get(tab.id).href='https://chatgpt.com/c/'+upstream;
+ const packet=h.packet(C1,'文件已生成',{eventType:'done',checkpoint:{phase:'finished',url:'https://chatgpt.com/c/'+upstream},fileSources:[{name:'server-auto.txt',mimeType:'application/octet-stream',conversation:upstream,messageId:'message-1111',sandboxPath:'/mnt/data/server-auto.txt',key:'/mnt/data/server-auto.txt'}]});const result=await h.content(packet);
  assert.equal(result.ok,true);assert.equal(h.counters.resolves.length,1);assert.equal(h.counters.uploads.length,1);assert.equal(h.tasks[0].state,'completed');
 });
 test('local file button triggers the matching ChatGPT card without focusing its work tab',async()=>{
@@ -101,6 +102,12 @@ test('local file button triggers the matching ChatGPT card without focusing its 
 test('browser restart invalidates persistent numerical tab IDs',async()=>{
  const options={saved:{},session:{doubaoSession:'old'},server:{}};let h=harness(options);await h.cycle();options.session={};h=harness(options);await h.boot;
  assert.equal(h.saved['lane:'+C1].bridge.tabId,null);assert.equal(h.saved.accountWorkTab,null);
+});
+test('extension reload reuses the exact recorded ChatGPT work tab',async()=>{
+ const options={saved:{},session:{doubaoSession:'loaded'},server:{}};let h=harness(options);await h.cycle();const lane=h.saved['lane:'+C1],id=lane.bridge.tabId,url='https://chatgpt.com/c/reload-reuse';
+ h.tabs.get(id).url=url;h.pages.get(id).href=url;lane.bridge.url=url;lane.active.checkpoint.url=url;lane.active.task.submitted=true;h.saved.accountWorkTab.currentConversationId=C1;const oldTabs=h.tabs,oldPages=h.pages;
+ options.session={};h=harness(options);for(const [key,value] of oldTabs)h.tabs.set(key,value);for(const [key,value] of oldPages)h.pages.set(key,value);await h.boot;
+ assert.equal(h.saved['lane:'+C1].bridge.tabId,id);assert.equal(h.saved.accountWorkTab.tabId,id);
 });
 test('discarded work tab is automatically reloaded instead of requiring a manual click',async()=>{
  const h=harness();await h.cycle();const id=h.saved['lane:'+C1].bridge.tabId;h.tabs.get(id).discarded=true;await h.cycle();assert.ok(h.counters.reloads.includes(id));assert.equal(h.saved['lane:'+C1].ready,true);

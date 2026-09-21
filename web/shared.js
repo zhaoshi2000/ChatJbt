@@ -75,7 +75,7 @@ export async function* parseSse(body, onActivity = () => {}) {
   } finally { await reader.cancel().catch(()=>{}); reader.releaseLock(); }
 }
 export function formatDuration(ms) { const seconds = Math.max(0, Math.floor(ms/1000)); return seconds < 60 ? `${seconds} 秒` : `${Math.floor(seconds/60)} 分 ${seconds%60} 秒`; }
-export function taskMarkdown(task) { return `# 逗包\n\n时间：${new Date(task.created).toLocaleString()}\n状态：${stateLabel(task.state)}\n模式：${task.provider}\n\n## 你\n\n${task.message}\n\n## 回复\n\n${task.text || '（暂无正文）'}\n\n---\n${task.detail || ''}\n`; }
+export function taskMarkdown(task) { return `# GBT\n\n时间：${new Date(task.created).toLocaleString()}\n状态：${stateLabel(task.state)}\n模式：${task.provider}\n\n## 你\n\n${task.message}\n\n## 回复\n\n${task.text || '（暂无正文）'}\n\n---\n${task.detail || ''}\n`; }
 
 /** Explain why a browser task is queued without implying the model is rate limited. */
 export function browserQueueHint({backendOnline = false, ready = false, paused = false, busy = false, hasDraft = false, activeTask = null, detail = ''} = {}) {

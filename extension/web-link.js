@@ -22,7 +22,7 @@
         taskId:typeof m.taskId==='string'?m.taskId.slice(0,100):'', fileName:typeof m.fileName==='string'?m.fileName.slice(0,160):'',
         confirmProfile:m.confirmProfile===true, profileLabel:typeof m.profileLabel==='string'?m.profileLabel.slice(0,80):''});
     } catch(error) {
-      result={ok:false,error:'后台桥接不可用，请重新加载逗包扩展并刷新本页。'+(error.message || '')};
+      result={ok:false,error:'后台桥接不可用，请重新加载 GBT 扩展并刷新本页。'+(error.message || '')};
     } finally { inflight.delete(m.id); }
     window.postMessage({channel:'doubao.web.response',id:m.id,result}, location.origin);
   });

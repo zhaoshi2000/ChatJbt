@@ -46,7 +46,7 @@ public final class BackendServer {
         server.start();
         maintenance.scheduleWithFixedDelay(()->{try{store.sweep();bridges.entrySet().removeIf(e->System.currentTimeMillis()-Json.num(e.getValue(),"lastSeen",0)>180_000);}catch(Exception e){System.err.println("[ERROR] Maintenance failed: "+e.getClass().getSimpleName());}},1,1,TimeUnit.SECONDS);
         for(var t:store.all())if(t.state.equals("queued"))upstream.submit(t);
-        System.out.println("逗包 "+VERSION+"  |  Java "+Runtime.version().feature());
+        System.out.println("GBT "+VERSION+"  |  Java "+Runtime.version().feature());
         System.out.println("Listening: http://127.0.0.1:"+config.port+"  |  provider="+config.provider);
         System.out.println("Local administrator token file: "+config.data.resolve("local-token.txt"));
         System.out.println("Use local-token.txt ONLY in Account Management to create account-scoped tokens. Pair one account token per independent browser profile.");
@@ -78,7 +78,7 @@ public final class BackendServer {
             if(path.equals("/api/bootstrap-account")){
                 require(method,"POST");
                 String origin=x.getRequestHeaders().getFirst("Origin"),expected="http://127.0.0.1:"+config.port;
-                if(!expected.equals(origin)&&!("http://localhost:"+config.port).equals(origin))throw new WorkspaceStore.Forbidden("首次账号只能从本机逗包聊天页创建");
+                if(!expected.equals(origin)&&!("http://localhost:"+config.port).equals(origin))throw new WorkspaceStore.Forbidden("首次账号只能从本机 GBT 聊天页创建");
                 var m=body(x);String name=Json.str(m,"name","我的账号").trim();if(name.isEmpty())name="我的账号";
                 synchronized(workspaceLock){
                     if(!workspaces.accounts.isEmpty())throw new TaskStore.Conflict("已经创建过账号。请复制当前聊天页保存的账号令牌，或到账号管理中重置令牌。");

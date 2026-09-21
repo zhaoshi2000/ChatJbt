@@ -4,7 +4,7 @@ export async function webWorker(operation, extra={}) {
   for (let i=0;i<30&&!document.documentElement.dataset.doubaoLink;i++)
     await new Promise(resolve=>setTimeout(resolve,100));
   if (!document.documentElement.dataset.doubaoLink)
-    throw new Error('未检测到“逗包 · 多账号后台桥接”。请加载本包 extension 文件夹，然后刷新本页；不需要打开侧边栏。');
+    throw new Error('未检测到“GBT · 多账号后台桥接”。请加载本包 extension 文件夹，然后刷新本页；不需要打开侧边栏。');
   return new Promise((resolve,reject)=>{
     const id=crypto.randomUUID();
     // Opening a cold/discarded ChatGPT tab can take substantially longer than
