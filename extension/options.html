@@ -1,5 +1,5 @@
 <!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>GBT · 多账号桥接设置</title><link rel="stylesheet" href="options.css"><script type="module" src="options.js"></script></head><body><main>
-<h1>GBT · 多账号后台桥接</h1><p>v1.2.0 · 不打开浏览器侧边栏</p>
+<h1>GBT · 多账号后台桥接</h1><p>v1.2.1 · 不打开浏览器侧边栏</p>
 <div class="note">一个浏览器配置文件只绑定一个账号。不同上游登录账号请使用独立 Edge/Chrome 配置文件，不能只多开普通标签页。首次创建账号请打开 GBT 网页的“账号管理”。</div>
 <form id="form"><label>Java 后端地址<input id="backendUrl" value="http://127.0.0.1:48643" required></label><label>账号专属令牌<input id="token" type="password" autocomplete="off" placeholder="账号管理创建账号后返回的令牌，不是管理员令牌" required></label>
 <label class="check"><input id="enabled" type="checkbox" checked>允许后台接收新任务</label><label class="check"><input id="confirmProfile" type="checkbox" required>我确认此独立浏览器配置文件只登录本账号，并且运行时不切换登录账号</label><button type="submit">保存并绑定账号</button><button type="button" id="open">打开 GBT 网页</button></form><pre id="status" role="status"></pre>

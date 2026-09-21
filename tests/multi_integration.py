@@ -150,7 +150,7 @@ class IsolationTests(unittest.TestCase):
         self.assertEqual(b.call('GET','/web/../../data/local-token.txt',token=False)[0],404)
         self.assertEqual(b.call('GET','/web/',token=False)[0],200)
         self.assertEqual(b.call('GET','/web/render.js',token=False)[0],200)
-        self.assertEqual(b.call('GET','/health',token=False)[1]['version'],'1.2.0')
+        self.assertEqual(b.call('GET','/health',token=False)[1]['version'],'1.2.1')
     def test_12_restart_recovers_scoped_lease_and_outbox_ACK(self):
         b=self.b;a=self.a;b.create(a,self.c);_,r=b.poll(a,self.c);t=r['task'];url='https://chatgpt.com/c/'+str(uuid.uuid4())
         b.event(a,t,1,'submitting',checkpoint={'url':url});b.event(a,t,2,'snapshot',text='before restart',checkpoint={'url':url})
@@ -199,14 +199,14 @@ class IsolationTests(unittest.TestCase):
         code,error=b.call('POST','/v1/chat/completions',{'model':'missing','messages':[{'role':'user','content':'hello'}]},a['token'])
         self.assertEqual(code,400);self.assertIn('message',error['error']);self.assertEqual(error['error']['code'],400)
         b.call('POST','/api/bridge/heartbeat',{'clientId':a['clientId'],'ready':True},a['token'])
-        payload={'model':'gbt','messages':[{'role':'system','content':'concise'},{'role':'user','content':'OpenClaw hello'}]}
+        payload={'model':'gbt','messages':[{'role':'system','content':'concise '+('x'*40000)},{'role':'user','content':'OpenClaw hello'},{'role':'user','content':'<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nRuntime metadata, not the user request\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>'}]}
         with cf.ThreadPoolExecutor(max_workers=1) as pool:
             future=pool.submit(b.call,'POST','/v1/chat/completions',payload,a['token']);task=None
             for _ in range(40):
                 rows=b.call('GET','/api/tasks',token=a['token'])[1]['tasks'];task=next((t for t in rows if not t['state'] in ('completed','error','cancelled','interrupted')),None)
                 if task:break
                 time.sleep(.05)
-            self.assertIsNotNone(task);_,claimed=b.poll(a,{'id':task['conversationId']});self.assertEqual(b.event(a,claimed['task'],1,'done',text='OpenClaw ok')[0],200)
+            self.assertIsNotNone(task);_,claimed=b.poll(a,{'id':task['conversationId']});self.assertLessEqual(len(claimed['task']['message']),20000);self.assertIn('OpenClaw hello',claimed['task']['message']);self.assertEqual(b.event(a,claimed['task'],1,'done',text='OpenClaw ok')[0],200)
             code,result=future.result(timeout=5)
         self.assertEqual(code,200);self.assertEqual(result['choices'][0]['message']['content'],'OpenClaw ok');self.assertEqual(result['model'],'gbt')
         tool_payload={'model':'gbt-6-thinking','stream':True,'messages':[{'role':'user','content':'list files'}],'tools':[{'type':'function','function':{'name':'list_files','description':'List files','parameters':{'type':'object','properties':{}}}}]}

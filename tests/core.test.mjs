@@ -60,6 +60,29 @@ test('missing stable id refuses to attach to a different duplicate prompt',()=>{
 test('normalization and fingerprints are stable across NBSP and line endings',()=>{
   assert.equal(core.hash('你好\u00a0世界\r\n测试'),core.hash('你好 世界\n测试'));
 });
+test('recovery tolerates ChatGPT whitespace reflow in long user messages',()=>{
+  const message='[SYSTEM]\nalpha\n\n[USER]\nlong request';
+  const users=[{key:'id:new',text:'[SYSTEM] alpha [USER] long request'}];
+  assert.equal(core.locateUser(users,{baselineKeys:[]},message),0);
+});
+test('recovery tolerates rendered Markdown changes inside a long message with stable edges',()=>{
+  const edge='e'.repeat(120),message=edge+'*'.repeat(500)+edge;
+  const users=[{key:'id:new',text:edge+'rendered middle'.repeat(40)+edge}];
+  assert.equal(core.locateUser(users,{baselineKeys:[]},message),0);
+});
+test('dedicated API recovery may claim only the newest post-baseline user turn',()=>{
+  const users=[{key:'id:old',text:'old'},{key:'id:new',text:'rendered differently'}];
+  assert.equal(core.locateUser(users,{baselineKeys:['id:old']},'raw API prompt',true),1);
+  assert.equal(core.locateUser(users,{baselineKeys:['id:old','id:new']},'raw API prompt',true),-1);
+  assert.equal(core.locateUser(users,{baselineKeys:['id:old']},'raw API prompt'),-1);
+});
+test('only an extension-owned pre-submit draft may be cleared during recovery',()=>{
+  const task={message:'系统准备的提示词',submitted:false};
+  assert.equal(core.ownsUnsentDraft('系统准备的提示词',task,{phase:'prepared'}),true);
+  assert.equal(core.ownsUnsentDraft('用户自己的草稿',task,{phase:'prepared'}),false);
+  assert.equal(core.ownsUnsentDraft('系统准备的提示词',{...task,submitted:true},{phase:'submitting'}),false);
+  assert.equal(core.ownsUnsentDraft('系统准备的提示词',task,{phase:'submitted'}),false);
+});
 test('accepts current ChatGPT WEB-prefixed conversation ids without widening hosts',()=>{
   assert.equal(conversationUrl('https://chatgpt.com/c/WEB:c87d90fd-2a2f-42f9-98d7-a6c1d686643a'),'https://chatgpt.com/c/WEB:c87d90fd-2a2f-42f9-98d7-a6c1d686643a');
   assert.equal(conversationUrl('https://example.com/c/WEB:c87d90fd-2a2f-42f9-98d7-a6c1d686643a'),'');
@@ -96,8 +119,8 @@ test('Markdown export preserves literal output rather than executing HTML',()=>{
   assert.match(md,/<script>x<\/script>/);assert.match(md,/```js/);assert.equal(TERMINAL.has('interrupted'),true);
 });
 
-test('web and background bridge require the same v1.2.0 backend',()=>{
- assert.equal(VERSION,'1.2.0');assert.equal(BACKEND_VERSION,'1.2.0');
+test('web and background bridge require the same v1.2.1 backend',()=>{
+ assert.equal(VERSION,'1.2.1');assert.equal(BACKEND_VERSION,'1.2.1');
 });
 test('queue hint distinguishes local connection, page readiness, pause, busy, draft and prior task',()=>{
  assert.match(browserQueueHint(),/本地后端未连接/);

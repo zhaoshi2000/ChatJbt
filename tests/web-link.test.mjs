@@ -14,7 +14,7 @@ function harness(pathname='/web/'){
   return {window,document,sent,responses,send};
 }
 test('web connector is invisible and adds no document UI',()=>{
-  const h=harness();assert.equal(h.document.documentElement.dataset.doubaoLink,'1.2.0');
+  const h=harness();assert.equal(h.document.documentElement.dataset.doubaoLink,'1.2.1');
   assert.equal(Object.keys(h.document).length,1);
 });
 test('content connector ignores messages from other frames or origins',async()=>{

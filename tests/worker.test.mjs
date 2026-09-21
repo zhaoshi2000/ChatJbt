@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
 import {webcrypto} from 'node:crypto';
-const ID='a'.repeat(32),ORIGIN=`chrome-extension://${ID}/`,TOKEN='b'.repeat(43),VERSION='1.2.0',CONTENT_REVISION='2026-09-21.10';
+const ID='a'.repeat(32),ORIGIN=`chrome-extension://${ID}/`,TOKEN='b'.repeat(43),VERSION='1.2.1',CONTENT_REVISION='2026-09-22.27';
 const ACCOUNT='account-aaaaaaaa',CLIENT='client-aaaaaaaa',C1='conversation-1111',C2='conversation-2222';
 const source=['extension/shared.js','extension/lane-core.js','extension/background.js'].map(p=>fs.readFileSync(new URL('../'+p,import.meta.url),'utf8').replace(/^import .*\n/gm,'').replaceAll('export ','')).join('\n');
 const clone=x=>x===undefined?undefined:structuredClone(x);
@@ -24,8 +24,8 @@ function harness({saved={},session={doubaoSession:'browser-session'},server={}}=
   create:async({url,active})=>{const id=Math.max(...tabs.keys())+1,tab={id,url,active,windowId:1,autoDiscardable:true};tabs.set(id,tab);pages.set(id,{ok:true,version:VERSION,revision:CONTENT_REVISION,composer:true,busy:false,hasDraft:false,activeTask:null,documentKey:'doc-'+id,href:url,userCount:url.includes('/c/')?1:0,detail:'fixture ready'});counters.creates.push(id);return clone(tab);},
   reload:async id=>{if(!tabs.has(id))throw Error('missing');tabs.get(id).discarded=false;counters.reloads.push(id);return clone(tabs.get(id));},
   remove:async id=>{tabs.delete(id);pages.delete(id);},
-  update:async(id,patch)=>{if(!tabs.has(id))throw Error('missing');Object.assign(tabs.get(id),patch);if(patch.url&&pages.has(id)){const page=pages.get(id);page.href=patch.url;page.userCount=patch.url.includes('/c/')?1:0;page.documentKey='doc-'+id+'-'+counters.requests.length;}if('autoDiscardable'in patch)counters.discards.push([id,patch.autoDiscardable]);return clone(tabs.get(id));},
-  sendMessage:async(id,packet)=>{if(packet.type==='jsc-ping')return clone(pages.get(id));if(packet.type==='jsc-run')counters.runs.push({id,packet:clone(packet)});if(packet.type==='jsc-download-file')counters.downloads.push({id,packet:clone(packet)});return {ok:true};}}};
+   update:async(id,patch)=>{if(!tabs.has(id))throw Error('missing');if(patch.active===true)for(const tab of tabs.values())if(tab.windowId===tabs.get(id).windowId)tab.active=false;Object.assign(tabs.get(id),patch);if(patch.url&&pages.has(id)){const page=pages.get(id);page.href=patch.url;page.userCount=patch.url.includes('/c/')?1:0;page.documentKey='doc-'+id+'-'+counters.requests.length;}if('autoDiscardable'in patch)counters.discards.push([id,patch.autoDiscardable]);return clone(tabs.get(id));},
+  sendMessage:async(id,packet)=>{if(packet.type==='jsc-ping')return clone(pages.get(id));if(packet.type==='jsc-clear-owned-draft'){const page=pages.get(id),cleared=page?.hasDraft&&(page.draftMessage===packet.task.message||(packet.forceApi===true&&packet.task.conversationId.startsWith('api-')));if(cleared){page.hasDraft=false;page.draftMessage='';}return {ok:true,cleared};}if(packet.type==='jsc-run')counters.runs.push({id,packet:clone(packet)});if(packet.type==='jsc-download-file')counters.downloads.push({id,packet:clone(packet)});return {ok:true};}}};
  const fetch=async(url,options={})=>{
    const parsed=new URL(url),path=parsed.pathname;if(parsed.hostname==='chatgpt.com'&&path==='/backend-api/estuary/content')return new Response(new Uint8Array([80,75,3,4]),{status:200,headers:{'Content-Type':'application/zip'}});
    const body=typeof options.body==='string'?JSON.parse(options.body):{};counters.requests.push({path,body});let value={ok:true},status=200;
@@ -64,6 +64,21 @@ test('stale same-version content script is reinjected before claiming queued wor
  const saved={accountWorkTab:{accountId:ACCOUNT,tabId:10,currentConversationId:''}},h=harness({saved});
  h.tabs.get(10).url='https://chatgpt.com/';h.pages.set(10,{ok:true,version:VERSION,revision:'old-revision',composer:true,busy:false,hasDraft:false,activeTask:null,documentKey:'old-doc',href:'https://chatgpt.com/',userCount:0,detail:'stale fixture'});
  await h.cycle();assert.deepEqual(h.counters.injections,[10]);assert.equal(h.counters.runs.length,1);assert.equal(h.counters.runs[0].packet.task.conversationId,C1);
+});
+test('matching abandoned system draft is cleared before the queued task is claimed',async()=>{
+ const saved={accountWorkTab:{accountId:ACCOUNT,tabId:10,currentConversationId:C1}},h=harness({saved});
+ h.tabs.get(10).url='https://chatgpt.com/';h.pages.set(10,{ok:true,version:VERSION,revision:CONTENT_REVISION,composer:true,busy:false,hasDraft:true,draftMessage:'测试 0',activeTask:null,documentKey:'draft-doc',href:'https://chatgpt.com/',userCount:0,detail:'fixture ready'});
+ await h.cycle();assert.equal(h.pages.get(10).hasDraft,false);assert.equal(h.counters.runs.length,1);
+});
+test('draft from an interrupted unsubmitted task is cleared before a newer task runs',async()=>{
+ const old={id:'task-old-draft',accountId:ACCOUNT,conversationId:C2,message:'旧系统提示词',state:'interrupted',provider:'browser',created:1,text:'',lastSeq:0,submitted:false,lease:'',deadline:0,checkpoint:{}},fresh={id:'task-fresh-one',accountId:ACCOUNT,conversationId:C1,message:'新系统提示词',state:'queued',provider:'browser',created:2,text:'',lastSeq:0,submitted:false,lease:'',deadline:Date.now()+120000,checkpoint:{}},saved={accountWorkTab:{accountId:ACCOUNT,tabId:10,currentConversationId:C1}},h=harness({saved,server:{tasks:[old,fresh]}});
+ h.tabs.get(10).url='https://chatgpt.com/';h.pages.set(10,{ok:true,version:VERSION,revision:CONTENT_REVISION,composer:true,busy:false,hasDraft:true,draftMessage:'旧系统提示词',activeTask:null,documentKey:'draft-doc',href:'https://chatgpt.com/',userCount:0,detail:'fixture ready'});
+ await h.cycle();assert.equal(h.pages.get(10).hasDraft,false);assert.equal(h.counters.runs.length,1);assert.equal(h.counters.runs[0].packet.task.id,'task-fresh-one');
+});
+test('OpenAI API work lanes clear only their dedicated stale draft',async()=>{
+ const api='api-conversation-1',task={id:'task-api-clean',accountId:ACCOUNT,conversationId:api,message:'新的 API 提示词',state:'queued',provider:'browser',created:2,text:'',lastSeq:0,submitted:false,lease:'',deadline:Date.now()+120000,checkpoint:{}},saved={accountWorkTab:{accountId:ACCOUNT,tabId:10,currentConversationId:api}},h=harness({saved,server:{tasks:[task],conversations:{[api]:{id:api,accountId:ACCOUNT,title:'API',upstreamUrl:''}}}});
+ h.tabs.get(10).url='https://chatgpt.com/';h.pages.set(10,{ok:true,version:VERSION,revision:CONTENT_REVISION,composer:true,busy:false,hasDraft:true,draftMessage:'已过期的 API 提示词',activeTask:null,documentKey:'api-draft-doc',href:'https://chatgpt.com/',userCount:0,detail:'fixture ready'});
+ await h.cycle();assert.equal(h.pages.get(10).hasDraft,false);assert.equal(h.counters.runs.length,1);
 });
 test('selected model is delivered unchanged to the bound ChatGPT page',async()=>{
  const h=harness();h.tasks[0].model='gpt-5-6-thinking-extended';await h.cycle();const run=h.counters.runs.find(x=>x.packet.task.conversationId===C1);assert.equal(run.packet.task.model,'gpt-5-6-thinking-extended');

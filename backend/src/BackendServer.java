@@ -10,7 +10,7 @@ import java.util.concurrent.*;
 
 /** Java 21 local-only backend. HTTP connections observe tasks; they do not own tasks. */
 public final class BackendServer {
-    static final String VERSION="1.2.0";
+    static final String VERSION="1.2.1";
     final Config config;final TaskStore store;final Upstream upstream;
     final WorkspaceStore workspaces;final Object workspaceLock=new Object();
     final HttpServer server;final String token;final String instanceId=UUID.randomUUID().toString();

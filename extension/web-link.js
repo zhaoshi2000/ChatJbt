@@ -26,5 +26,5 @@
     } finally { inflight.delete(m.id); }
     window.postMessage({channel:'doubao.web.response',id:m.id,result}, location.origin);
   });
-  document.documentElement.dataset.doubaoLink='1.2.0';
+  document.documentElement.dataset.doubaoLink='1.2.1';
 })();

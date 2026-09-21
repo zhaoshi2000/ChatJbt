@@ -5,6 +5,8 @@ import java.util.*;
 
 /** Small account-scoped OpenAI Chat Completions facade for local agent clients. */
 final class OpenAiCompat {
+    private static final int MAX_PROMPT_CHARS=500_000;
+    private static final int WEB_PROMPT_CHARS=20_000;
     private static final LinkedHashMap<String,String> MODELS=new LinkedHashMap<>();
     static {
         MODELS.put("gbt","");
@@ -50,14 +52,17 @@ final class OpenAiCompat {
     private record Prompt(String text,Set<String> toolNames,int inputChars) {}
     @SuppressWarnings("unchecked") private static Prompt prompt(Map<String,Object> request){
         Object raw=request.get("messages");if(!(raw instanceof List<?> messages)||messages.isEmpty())throw new IllegalArgumentException("messages 必须是非空数组");
-        StringBuilder out=new StringBuilder("你正在通过 GBT 的 OpenAI 兼容接口回答。请遵循下面按角色标记的完整对话。\n\n");int input=0;
+        StringBuilder out=new StringBuilder("你正在通过 GBT 的 OpenAI 兼容接口回答。请遵循下面按角色标记的完整对话。\n\n");int input=0;String latestUser="";
         for(Object item:messages){
             if(!(item instanceof Map<?,?> source))throw new IllegalArgumentException("messages 项格式无效");Map<String,Object> m=(Map<String,Object>)source;
             String role=Json.str(m,"role","");if(!Set.of("system","developer","user","assistant","tool").contains(role))throw new IllegalArgumentException("不支持的消息角色："+role);
-            String text=content(m.get("content"));input+=text.length();out.append('[').append(role.toUpperCase(Locale.ROOT)).append(']');
+            String text=content(m.get("content"));if(role.equals("user")&&!isInternalRuntimeContext(text))latestUser=text;input+=text.length();out.append('[').append(role.toUpperCase(Locale.ROOT)).append(']');
             String call=Json.str(m,"tool_call_id","");if(!call.isEmpty())out.append(" tool_call_id=").append(call);out.append('\n').append(text).append("\n\n");
             if(m.get("tool_calls") instanceof List<?> calls&&!calls.isEmpty())out.append("[ASSISTANT_TOOL_CALLS]\n").append(Json.stringify(calls)).append("\n\n");
         }
+        String explicit=Json.str(request,"prompt","");
+        if(explicit.isEmpty()&&request.get("input") instanceof String value)explicit=value;
+        if(!explicit.isEmpty()&&!explicit.equals(latestUser)){latestUser=explicit;input+=explicit.length();out.append("[USER]\n").append(explicit).append("\n\n");}
         Set<String> names=new LinkedHashSet<>();Object toolsRaw=request.get("tools");
         if(toolsRaw instanceof List<?> tools&&!tools.isEmpty()){
             if(tools.size()>128)throw new IllegalArgumentException("tools 数量超过限制");
@@ -66,7 +71,18 @@ final class OpenAiCompat {
                .append("如需调用工具，只输出严格 JSON，不要加 Markdown：{\"tool_calls\":[{\"name\":\"工具名\",\"arguments\":{}}]}。")
                .append("工具名必须来自 AVAILABLE_TOOLS；不需要工具时正常回答文本。\n");
         }
-        if(out.length()>32_000)throw new IllegalArgumentException("输入超过 GBT 网页桥接的 32000 字符限制");return new Prompt(out.toString(),names,input);
+        if(out.length()>MAX_PROMPT_CHARS)throw new IllegalArgumentException("输入超过 GBT 网页桥接的 500000 字符限制");
+        String text=out.toString();
+        if(text.length()>WEB_PROMPT_CHARS){
+            if(!latestUser.isEmpty())text+="\n\n[LATEST_USER_REQUEST]\n"+latestUser+"\n";
+            int side=(WEB_PROMPT_CHARS-160)/2;
+            text=text.substring(0,side)+"\n\n[GBT 已压缩中间历史内容以适配 ChatGPT 网页输入长度；保留了开头规则以及末尾的最新消息和工具定义]\n\n"+text.substring(text.length()-side);
+        }
+        return new Prompt(text,names,input);
+    }
+    private static boolean isInternalRuntimeContext(String text){
+        String value=text.trim();
+        return value.startsWith("<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>")&&value.endsWith("<<<END_OPENCLAW_INTERNAL_CONTEXT>>>");
     }
     @SuppressWarnings("unchecked") private static String content(Object raw){
         if(raw==null)return "";if(raw instanceof String s)return s;if(!(raw instanceof List<?> parts))throw new IllegalArgumentException("message content 格式无效");

@@ -1,6 +1,6 @@
-export const VERSION = '1.2.0';
+export const VERSION = '1.2.1';
 // Shared web/extension protocol version; all components ship together.
-export const BACKEND_VERSION = '1.2.0';
+export const BACKEND_VERSION = '1.2.1';
 export const DEFAULT_URL = 'http://127.0.0.1:48643';
 export const TERMINAL = new Set(['completed', 'error', 'cancelled', 'interrupted']);
 export const stateLabel = state => ({queued:'排队中',running:'处理中',completed:'已完成',error:'失败',cancelled:'已取消',interrupted:'已中断'}[state] || state);

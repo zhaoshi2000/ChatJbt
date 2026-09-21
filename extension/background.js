@@ -1,7 +1,7 @@
 import {DEFAULT_URL,VERSION,TERMINAL,normalizeBaseUrl,apiRequest} from './shared.js';
 import {chatUrl,conversationUrl,stableConversationUrl,pageAtTarget,validId,assertTask,assertPacket,planTaskIds} from './lane-core.js';
 const storage=chrome.storage.local, PREFIX='lane:', ACCOUNT_TAB='accountWorkTab', ALARM='doubao-multi-recover';
-const CONTENT_REVISION='2026-09-21.10';
+const CONTENT_REVISION='2026-09-22.27';
 const get=async key=>(await storage.get(key))[key];
 const write=value=>storage.set(value);
 const locks=new Map();
@@ -165,8 +165,17 @@ async function forwardEvent(packet,sender){
     if(typeof packet.detail==='string')a.pending.detail=packet.detail.slice(0,600);
     if(packet.eventType==='submitting')a.task.submitted=true;
     await saveLane(lane);lane=await flush(lane);
+    if(['submitting','done','error','interrupted'].includes(packet.eventType))await restorePreviousTab(lane);
     return {ok:true,state:lane.active.task.state,terminal:TERMINAL.has(lane.active.task.state)};
   });
+}
+async function restorePreviousTab(lane){
+  const previousId=lane.restoreTabId;if(!previousId)return;
+  delete lane.restoreTabId;await saveLane(lane);
+  const work=await chrome.tabs.get(lane.bridge?.tabId).catch(()=>null),previous=await chrome.tabs.get(previousId).catch(()=>null);
+  if(!work||!previous||work.windowId!==previous.windowId)return;
+  const visible=(await chrome.tabs.query({active:true,windowId:work.windowId}))[0];
+  if(visible?.id===work.id)await chrome.tabs.update(previous.id,{active:true}).catch(()=>{});
 }
 const wakePulses=new Map();
 async function wakeHiddenWorkTab(packet,sender){
@@ -184,9 +193,9 @@ async function wakeHiddenWorkTab(packet,sender){
 async function release(lane,state){
   if(lane.bridge?.tabId&&lane.active)await chrome.tabs.sendMessage(lane.bridge.tabId,{type:'jsc-release',id:lane.active.task.id,state}).catch(()=>{});
   if(lane.bridge?.tabId)await chrome.tabs.update(lane.bridge.tabId,{autoDiscardable:lane.bridge.autoDiscardable!==false}).catch(()=>{});
-  lane.active=null;await saveLane(lane);
+  await restorePreviousTab(lane);lane.active=null;await saveLane(lane);
 }
-async function workLane(id,summary,enabled){
+async function workLane(id,summary,enabled,abandonedDrafts=[]){
   return ordered(id,async()=>{
     let lane=await loadLane(id);
     try{
@@ -198,6 +207,16 @@ async function workLane(id,summary,enabled){
       }
       if(!lane?.active&&(!enabled||!summary||TERMINAL.has(summary.state)))return;
       const bound=await ensureLane(id);lane=bound.lane;
+      if(!lane.active&&bound.info.hasDraft&&summary){
+        for(const candidate of [summary,...abandonedDrafts]){
+          const cleanup=await chrome.tabs.sendMessage(lane.bridge.tabId,{type:'jsc-clear-owned-draft',task:{id:candidate.id,accountId:candidate.accountId,conversationId:candidate.conversationId,message:candidate.message},documentKey:lane.bridge.documentKey,forceApi:false}).catch(()=>null);
+          if(cleanup?.cleared){bound.info.hasDraft=false;break;}
+        }
+        if(bound.info.hasDraft&&summary.conversationId.startsWith('api-')){
+          const cleanup=await chrome.tabs.sendMessage(lane.bridge.tabId,{type:'jsc-clear-owned-draft',task:{id:summary.id,accountId:summary.accountId,conversationId:summary.conversationId,message:summary.message},documentKey:lane.bridge.documentKey,forceApi:true}).catch(()=>null);
+          if(cleanup?.cleared)bound.info.hasDraft=false;
+        }
+      }
       if(!bound.info.composer||(!lane.active&&(bound.info.busy||bound.info.hasDraft||bound.info.activeTask)))throw new Error(bound.info.hasDraft?'工作网页有未发送的草稿，不会覆盖；请先处理草稿':'工作网页尚未就绪、未登录或正在生成其他消息');
       const result=await request('/api/browser/poll',{method:'POST',body:{clientId:await get('clientId'),conversationId:id,waitSeconds:0}});
       if(!result.task)return;
@@ -206,13 +225,15 @@ async function workLane(id,summary,enabled){
       if(!lane.active)lane.active={task:{...task,text:''},seq:task.lastSeq||0,checkpoint:task.checkpoint||{},pending:null,lastAck:''};
       else{lane.active.task={...task,text:'',submitted:task.submitted||lane.active.task.submitted};lane.active.seq=Math.max(lane.active.seq,task.lastSeq||0);}
       await saveLane(lane);await chrome.tabs.update(lane.bridge.tabId,{autoDiscardable:false}).catch(()=>{});
+      const workTab=await chrome.tabs.get(lane.bridge.tabId),previous=(await chrome.tabs.query({active:true,windowId:workTab.windowId}))[0];
+      if(previous&&previous.id!==workTab.id){lane.restoreTabId=previous.id;await saveLane(lane);await chrome.tabs.update(workTab.id,{active:true});}
       const reply=await chrome.tabs.sendMessage(lane.bridge.tabId,{type:'jsc-run',task:{...task,submitted:lane.active.task.submitted},checkpoint:lane.active.checkpoint,documentKey:lane.bridge.documentKey,expectedUrl:bound.expected});
       if(!reply?.ok)throw new Error(reply?.error||'页面未接受任务');
       lane.detail='本会话正在独立生成';lane.ready=true;await saveLane(lane);
     }catch(error){
       lane=await loadLane(id);
       if(!lane){const config=await settings();lane={conversationId:id,accountId:config.accountId,bridge:null,active:null,detail:'',ready:false};}
-      lane.detail=error.message||String(error);lane.ready=false;await saveLane(lane);
+      await restorePreviousTab(lane);lane.detail=error.message||String(error);lane.ready=false;await saveLane(lane);
       // Isolate a broken lane: other accounts/conversations continue. No silent resend.
       if(error.status===401||error.status===403)throw error;
     }
@@ -234,8 +255,9 @@ async function runCycle(){
       // One signed-in account owns exactly one ChatGPT work tab. Tasks from
       // different local conversations therefore run serially in that tab.
       const ids=planTaskIds(config.enabled?tasks:[],active,1);
-      await Promise.all(ids.map(id=>workLane(id,tasks.find(t=>t.conversationId===id&&!TERMINAL.has(t.state)),config.enabled)));
-      const updated=(await allLanes()).filter(l=>l.accountId===config.accountId),count=updated.filter(l=>l.active).length,waiting=tasks.some(t=>!TERMINAL.has(t.state)),blocked=updated.find(l=>waiting&&!l.active&&l.ready===false&&l.detail);
+      const abandonedDrafts=tasks.filter(t=>TERMINAL.has(t.state)&&!t.submitted).slice(0,12);
+      await Promise.all(ids.map(id=>workLane(id,tasks.find(t=>t.conversationId===id&&!TERMINAL.has(t.state)),config.enabled,abandonedDrafts)));
+      const updated=(await allLanes()).filter(l=>l.accountId===config.accountId),count=updated.filter(l=>l.active).length,waiting=tasks.some(t=>!TERMINAL.has(t.state)),blocked=updated.find(l=>ids.includes(l.conversationId)&&!l.active&&l.ready===false&&l.detail);
       const ready=config.enabled&&!blocked,detail=!config.enabled?'已暂停领取新任务':blocked?.detail||'账号桥接在线；同一账号复用一个工作标签页';
       await request('/api/bridge/heartbeat',{method:'POST',body:{clientId:await get('clientId'),ready,activeCount:count,detail}});
       await setStatus({backend:'online',ready,activeCount:count,accountId:config.accountId,detail});failures=0;

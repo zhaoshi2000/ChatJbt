@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "GBT · 多账号后台桥接",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "minimum_chrome_version": "120",
   "description": "每个浏览器配置文件绑定一个账号，同一账号复用一个 ChatGPT 工作标签页并按顺序执行；不使用侧边栏。",
   "permissions": [

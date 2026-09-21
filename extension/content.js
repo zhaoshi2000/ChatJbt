@@ -1,7 +1,7 @@
 /* DOM adapter only. No cookies, browser session extraction, private ChatGPT APIs or remote code. */
 (() => {
-  const VERSION='1.2.0';
-  const CONTENT_REVISION='2026-09-21.10';
+  const VERSION='1.2.1';
+  const CONTENT_REVISION='2026-09-22.27';
   const documentKey=crypto.randomUUID();
   function conversationUrl(raw){try{const u=new URL(raw);return u.protocol==='https:'&&['chatgpt.com','chat.openai.com'].includes(u.hostname)&&/^\/(?:g\/[A-Za-z0-9_-]+\/)?c\/(?:WEB:)?[A-Za-z0-9_-]+$/.test(u.pathname)?'https://chatgpt.com'+u.pathname:'';}catch{return '';}}
   function stableConversationUrl(raw){const url=conversationUrl(raw);return url&&!/\/c\/WEB:/.test(url)?url:'';}
@@ -39,10 +39,15 @@
   const elementText=el=>(el?.innerText ?? el?.textContent ?? '').replace(/\u00a0/g,' ');
   const composerText=el=>('value' in el ? el.value : elementText(el));
   function users() {
-    return Array.from(document.querySelectorAll('[data-message-author-role="user"]')).map((node,index)=>{
+    const result=[];
+    for(const [index,node] of Array.from(document.querySelectorAll('[data-message-author-role="user"]')).entries()){
       const id=node.getAttribute('data-message-id') || node.closest('[data-message-id]')?.getAttribute('data-message-id');
-      const text=elementText(node);return {node,text,key:id?`id:${id}`:`index:${index}:${core.hash(text)}`};
-    });
+      const text=elementText(node),key=id?`id:${id}`:`index:${index}:${core.hash(text)}`;
+      const existing=id&&result.find(item=>item.key===key);
+      if(existing){existing.text+='\n'+text;continue;}
+      result.push({node,text,key});
+    }
+    return result;
   }
   function assistantAfter(userNode) {
     return Array.from(document.querySelectorAll('[data-message-author-role="assistant"]')).filter(node=>
@@ -213,12 +218,40 @@
       el.dispatchEvent(new InputEvent('input',{bubbles:true,inputType:'insertText',data:value}));
       el.dispatchEvent(new Event('change',{bubbles:true}));
     }else{
+      if(!value){
+        el.textContent=value;
+        el.dispatchEvent(new InputEvent('input',{bubbles:true,inputType:'deleteContentBackward',data:null}));
+        return;
+      }
       // Select only this editor's contents, never document-wide selectAll.
       const range=document.createRange();range.selectNodeContents(el);
       const selection=window.getSelection();selection.removeAllRanges();selection.addRange(range);
       const inserted=document.execCommand('insertText',false,value);
       if(!inserted){el.textContent=value;el.dispatchEvent(new InputEvent('input',{bubbles:true,inputType:'insertText',data:value}));}
     }
+  }
+  async function fillComposer(el,value) {
+    fill(el,value);
+    const deadline=Date.now()+5000;
+    while(Date.now()<deadline){
+      const current=composer();
+      if(current&&core.normalize(composerText(current))){
+        await sleep(Math.min(3000,300+Math.ceil(value.length/10)));
+        if(core.normalize(composerText(composer()||current)))return;
+      }
+      await sleep(50);
+    }
+    throw new Error('ChatGPT 输入框没有接受消息，已停止发送');
+  }
+  async function clearComposerPersistently(el,timeoutMs=4000) {
+    const deadline=Date.now()+timeoutMs;let emptySince=0;
+    while(Date.now()<deadline){
+      if(core.normalize(composerText(el))){fill(el,'');emptySince=0;}
+      else if(!emptySince)emptySince=Date.now();
+      else if(Date.now()-emptySince>=500)return true;
+      await sleep(50);
+    }
+    return !core.normalize(composerText(el));
   }
   function attachmentFile(attachment){
     if(!attachment||typeof attachment.base64!=='string'||!/^(image\/(?:png|jpeg|webp|gif))$/.test(attachment.mimeType||''))throw new Error('图片附件格式无效');
@@ -275,6 +308,10 @@
     // Never stop a later request that the user sent manually.
     if(index>=0&&index===list.length-1)stopButton()?.click();
   }
+  function clearUnsentDraftIfOwned(job) {
+    const el=composer();
+    if(el&&core.ownsUnsentDraft(composerText(el),job.task,job.checkpoint))fill(el,'');
+  }
   async function execute(job) {
     try {
       const cp=job.checkpoint;
@@ -285,11 +322,12 @@
         const el=composer();
         if(!el)throw new Error('没有找到 ChatGPT 输入框。请登录并进入正常聊天页，再检查页面适配器。');
         if(stopButton())throw new Error('ChatGPT 正在处理另一条请求，未发送当前任务');
+        if(core.normalize(composerText(el))&&job.task.conversationId.startsWith('api-'))await clearComposerPersistently(el);
         if(core.normalize(composerText(el)))throw new Error('工作标签页输入框已有草稿，为避免覆盖未发送本任务，请先处理草稿');
         cp.baselineKeys=users().map(u=>u.key);cp.url=location.href;cp.phase='prepared';
         await selectModel(job.task.model||'');cp.model=job.task.model||'';
         await emit(job,'checkpoint',{checkpoint:cp});
-        fill(el,job.task.message);
+        await fillComposer(el,job.task.message);
         await attachImages(job.task.attachments||[]);
         let send=null;const sendDeadline=Date.now()+10_000;
         while(!disposed&&!job.cancelled&&Date.now()<sendDeadline){
@@ -309,21 +347,29 @@
       while(!disposed&&!job.cancelled&&Date.now()<job.deadline){
         const expected=job.expectedUrl;
         if(expected&&conversationUrl(location.href)!==expected)throw new Error('网页导航到了其他会话，已停止采集');
-        const list=users(),index=core.locateUser(list,cp,job.task.message);
+        const list=users(),apiLane=job.task.conversationId.startsWith('api-'),index=core.locateUser(list,cp,job.task.message,apiLane);
+        let nodes=[];
         if(index<0){
+          if(apiLane&&stableConversationUrl(location.href))nodes=Array.from(document.querySelectorAll('[data-message-author-role="assistant"]'));
+          if(nodes.length){missingSince=0;const durableUrl=stableConversationUrl(location.href);if(durableUrl&&cp.url!==durableUrl){cp.url=durableUrl;cp.phase='observing';await emit(job,'checkpoint',{checkpoint:cp});}}
+          else{
           if(!missingSince)missingSince=Date.now();
           if(Date.now()-missingSince>45_000)throw new Error('无法确认原消息所在位置。为避免重复发送或读错会话，已停止自动操作；请回到原会话核对。');
           await sleep(350);continue;
+          }
         }
-        missingSince=0;
-        if(index!==list.length-1)throw new Error('工作标签页出现另一条用户消息，当前采集已中断，以免混入其他回复');
-        const durableUrl=stableConversationUrl(location.href);
-        if(cp.userKey!==list[index].key||(durableUrl&&cp.url!==durableUrl)){
-          cp.userKey=list[index].key;if(durableUrl)cp.url=durableUrl;cp.phase='observing';
-          await emit(job,'checkpoint',{checkpoint:cp});
+        if(index>=0){
+          missingSince=0;
+          if(index!==list.length-1)throw new Error('工作标签页出现另一条用户消息，当前采集已中断，以免混入其他回复');
+          const durableUrl=stableConversationUrl(location.href);
+          if(cp.userKey!==list[index].key||(durableUrl&&cp.url!==durableUrl)){
+            cp.userKey=list[index].key;if(durableUrl)cp.url=durableUrl;cp.phase='observing';
+            await emit(job,'checkpoint',{checkpoint:cp});
+          }
+          nodes=assistantAfter(list[index].node);
         }
-        const nodes=assistantAfter(list[index].node),newest=nodes.at(-1);
-        const text=nodes.map(answerText).filter(Boolean).join('\n\n'),media=answerImages(newest,list[index].node),fileLinks=answerFileLinks(newest,list[index].node),downloads=answerFileActions(newest,list[index].node),mediaKey=[...media.map(img=>(img.currentSrc||img.src)+':'+img.naturalWidth+'x'+img.naturalHeight),...fileLinks.map(link=>link.getAttribute('href')||''),...downloads.map(file=>file.name)].join('|');
+        const newest=nodes.at(-1),userNode=index>=0?list[index].node:null;
+        const text=nodes.map(answerText).filter(Boolean).join('\n\n'),media=answerImages(newest,userNode),fileLinks=answerFileLinks(newest,userNode),downloads=answerFileActions(newest,userNode),mediaKey=[...media.map(img=>(img.currentSrc||img.src)+':'+img.naturalWidth+'x'+img.naturalHeight),...fileLinks.map(link=>link.getAttribute('href')||''),...downloads.map(file=>file.name)].join('|');
         const responseNode=media.at(-1)||newest,progress=pageProgress(responseNode),now=Date.now(),hasFile=fileLinks.length>0||downloads.length>0;
         if(text!==lastText){lastText=text;lastChange=now;}
         if(mediaKey!==lastMedia){lastMedia=mediaKey;lastChange=now;}
@@ -358,7 +404,7 @@
         job.deadline=Math.max(job.deadline,Date.now()+10_000);
         await emit(job,'interrupted',{detail:error.message || String(error),checkpoint:job.checkpoint}).catch(()=>{});
       }
-    }finally{if(active===job)active=null;announce();}
+    }finally{clearUnsentDraftIfOwned(job);if(active===job)active=null;announce();}
   }
   function onMessage(packet,sender,respond) {
     if(disposed)return;
@@ -371,12 +417,19 @@
       const job={task:packet.task,expectedUrl:conversationUrl(packet.expectedUrl),checkpoint:structuredClone(packet.checkpoint || {}),deadline:packet.task.deadline || Date.now()+900_000,cancelled:false,lastPushedText:packet.task.text || ''};
       active=job;respond({ok:true});execute(job);return;
     }
+    if(packet?.type==='jsc-clear-owned-draft'){
+      if(packet.documentKey!==documentKey||active||!packet.task?.id||!packet.task?.accountId||!packet.task?.conversationId||typeof packet.task.message!=='string'){respond({ok:false,error:'无效草稿清理请求'});return;}
+      const job={task:{...packet.task,submitted:false},checkpoint:{}};
+      const el=composer(),cleared=!!el&&(core.ownsUnsentDraft(composerText(el),job.task,job.checkpoint)||(packet.forceApi===true&&packet.task.conversationId.startsWith('api-')&&!!core.normalize(composerText(el))));
+      if(!cleared){respond({ok:true,cleared:false});return;}
+      (async()=>respond({ok:true,cleared:await clearComposerPersistently(el)}))();return true;
+    }
     if(packet?.type==='jsc-download-file'){
       if(packet.documentKey!==documentKey||typeof packet.taskMessage!=='string'||typeof packet.fileName!=='string'){respond({ok:false,error:'无效下载请求'});return;}
       try{respond(triggerFileDownload(packet.taskMessage,packet.fileName));}catch(error){respond({ok:false,error:error.message||String(error)});};return;
     }
     if(packet?.type==='jsc-release'){
-      if(active?.task.id===packet.id){if(packet.state!=='completed')stopIfOwned(active);active.cancelled=true;}
+      if(active?.task.id===packet.id){if(packet.state!=='completed')stopIfOwned(active);clearUnsentDraftIfOwned(active);active.cancelled=true;}
       respond({ok:true});return;
     }
   }
