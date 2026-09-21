@@ -1,6 +1,6 @@
 import {DEFAULT_URL,VERSION,TERMINAL,normalizeBaseUrl,apiRequest} from './shared.js';
 import {chatUrl,conversationUrl,validId,assertTask,assertPacket,planTaskIds} from './lane-core.js';
-const storage=chrome.storage.local, PREFIX='lane:', ALARM='doubao-multi-recover';
+const storage=chrome.storage.local, PREFIX='lane:', ACCOUNT_TAB='accountWorkTab', ALARM='doubao-multi-recover';
 const get=async key=>(await storage.get(key))[key];
 const write=value=>storage.set(value);
 const locks=new Map();
@@ -26,6 +26,7 @@ const boot=(async()=>{
       if(lane.bridge)lane.bridge={...lane.bridge,tabId:null,documentKey:null};
       await saveLane(lane);
     }
+    await write({[ACCOUNT_TAB]:null});
     await chrome.storage.session.set({doubaoSession:crypto.randomUUID()});
   }
   if(!(await chrome.alarms.get(ALARM)))await chrome.alarms.create(ALARM,{periodInMinutes:0.5});
@@ -57,6 +58,24 @@ async function ensureContent(tabId,waitMs=60_000){
   if(tab){await chrome.tabs.update(tabId,{active:true}).catch(()=>{});await chrome.windows.update(tab.windowId,{focused:true}).catch(()=>{});}
   throw new Error(lastInfo?.detail||'已自动打开工作页，但 ChatGPT 输入框长时间未就绪；请在弹出的页面完成登录后重试');
 }
+async function accountWorkTab(config,lane){
+  let shared=await get(ACCOUNT_TAB),tab;
+  if(shared?.accountId===config.accountId&&shared.tabId)try{tab=await chrome.tabs.get(shared.tabId);}catch{}
+  if(tab&&chatUrl(tab.url||tab.pendingUrl))return {shared,tab};
+  const lanes=(await allLanes()).filter(item=>item.accountId===config.accountId),active=lanes.find(item=>item.active&&item.bridge?.tabId),fallback=lane.bridge?.tabId?lane:lanes.find(item=>item.bridge?.tabId),source=active||fallback;
+  if(source)try{tab=await chrome.tabs.get(source.bridge.tabId);}catch{}
+  if(tab&&chatUrl(tab.url||tab.pendingUrl))shared={accountId:config.accountId,tabId:tab.id,currentConversationId:source.conversationId};
+  else{tab=await chrome.tabs.create({url:'https://chatgpt.com/',active:false});shared={accountId:config.accountId,tabId:tab.id,currentConversationId:''};}
+  // v1.2 originally created one tab per conversation. On the first run of the
+  // shared-tab design, close only inactive tabs that the extension itself had
+  // recorded, leaving manual ChatGPT tabs and any legacy active task untouched.
+  for(const old of lanes){
+    const oldId=old.bridge?.tabId;if(!oldId||oldId===tab.id||old.active)continue;
+    try{const candidate=await chrome.tabs.get(oldId);if(chatUrl(candidate.url||candidate.pendingUrl))await chrome.tabs.remove(oldId);}catch{}
+    old.bridge={...old.bridge,tabId:null,documentKey:null};await saveLane(old);
+  }
+  await write({[ACCOUNT_TAB]:shared});return {shared,tab};
+}
 async function ensureLane(conversationId,{focus=false}={}) {
   const config=await settings();if(!config.accountId)throw new Error('请先使用账号专属令牌配对');
   if(!validId(conversationId))throw new Error('请先新建一个本地会话');
@@ -65,22 +84,19 @@ async function ensureLane(conversationId,{focus=false}={}) {
   let lane=await loadLane(conversationId)||{conversationId,accountId:config.accountId,bridge:null,active:null,detail:''};
   if(lane.accountId!==config.accountId)throw new Error('旧工作区绑定与本账号不同，拒绝复用');
   const expected=conversationUrl(conversation.upstreamUrl)||conversationUrl(lane.active?.checkpoint?.url);
-  let tab;
-  if(lane.bridge?.tabId)try{tab=await chrome.tabs.get(lane.bridge.tabId);}catch{}
-  if(tab&&!chatUrl(tab.url||tab.pendingUrl))throw new Error('工作标签页已离开 ChatGPT。关闭该标签页后点“打开工作网页”恢复原会话，不能在别的页面继续。');
+  let {shared,tab}=await accountWorkTab(config,lane);
+  if(lane.active?.task.submitted&&!expected&&shared.currentConversationId!==conversationId)throw new Error('原提交没有确认会话地址，无法安全恢复。请停止此任务并到原网页核对，不会重复发送。');
+  const switching=shared.currentConversationId!==conversationId;
+  if(switching){tab=await chrome.tabs.update(tab.id,{url:expected||'https://chatgpt.com/'});shared={...shared,currentConversationId:conversationId,documentKey:null};await write({[ACCOUNT_TAB]:shared});}
   if(tab?.discarded)await chrome.tabs.reload(tab.id).catch(()=>{});
-  if(!tab){
-    if(lane.active?.task.submitted&&!expected)throw new Error('原提交没有确认会话地址，无法安全恢复。请停止此任务并到原网页核对，不会重复发送。');
-    tab=await chrome.tabs.create({url:expected||'https://chatgpt.com/',active:focus});
-    lane.bridge={tabId:tab.id,url:expected||'https://chatgpt.com/',autoDiscardable:tab.autoDiscardable!==false,documentKey:null};await saveLane(lane);
-  }
   if(focus){await chrome.tabs.update(tab.id,{active:true});await chrome.windows.update(tab.windowId,{focused:true}).catch(()=>{});}
   const bound=await ensureContent(tab.id), actual=conversationUrl(bound.info.href||bound.tab.url);
   if(expected&&actual!==expected)throw new Error('工作网页地址与本地会话不一致，已阻止串聊。请恢复原对话地址：'+expected);
-  if(!expected&&!lane.active?.task.submitted&&(actual||bound.info.userCount>0))throw new Error('新建会话的工作页已有其他聊天内容。请关闭该工作页后重新打开，不会接管已有对话。');
+  if(!expected&&!switching&&!lane.active?.task.submitted&&(actual||bound.info.userCount>0))throw new Error('新建会话的工作页已有其他聊天内容。请点击“新对话”后重试，不会接管已有对话。');
   if(lane.active?.task.submitted&&lane.bridge.documentKey&&lane.bridge.documentKey!==bound.info.documentKey&&!expected)
     throw new Error('提交后的页面已被替换，且没有安全恢复地址。请停止并核对原网页。');
   lane.bridge={...lane.bridge,tabId:tab.id,documentKey:bound.info.documentKey,url:bound.info.href||bound.tab.url};
+  await write({[ACCOUNT_TAB]:{...shared,tabId:tab.id,currentConversationId:conversationId,documentKey:bound.info.documentKey}});
   lane.detail=bound.info.detail;lane.ready=!!bound.info.composer;await saveLane(lane);
   return {lane,info:bound.info,conversation,expected};
 }
@@ -156,10 +172,12 @@ async function runCycle(){
       if(me.account.clientId!==await get('clientId'))throw new Error('此配置文件的账号绑定已失效，请到网页连接设置重新配对');
       const {tasks}=await request('/api/tasks');const lanes=(await allLanes()).filter(l=>l.accountId===config.accountId);
       const active=lanes.filter(l=>l.active).map(l=>l.conversationId);
-      const ids=planTaskIds(config.enabled?tasks:[],active,me.maxConcurrent||3);
+      // One signed-in account owns exactly one ChatGPT work tab. Tasks from
+      // different local conversations therefore run serially in that tab.
+      const ids=planTaskIds(config.enabled?tasks:[],active,1);
       await Promise.all(ids.map(id=>workLane(id,tasks.find(t=>t.conversationId===id&&!TERMINAL.has(t.state)),config.enabled)));
       const updated=(await allLanes()).filter(l=>l.accountId===config.accountId),count=updated.filter(l=>l.active).length;
-      await request('/api/bridge/heartbeat',{method:'POST',body:{clientId:await get('clientId'),ready:config.enabled,activeCount:count,detail:config.enabled?'独立账号桥接在线；每个会话使用独立工作标签页':'已暂停领取新任务'}});
+      await request('/api/bridge/heartbeat',{method:'POST',body:{clientId:await get('clientId'),ready:config.enabled,activeCount:count,detail:config.enabled?'账号桥接在线；同一账号复用一个工作标签页':'已暂停领取新任务'}});
       await setStatus({backend:'online',ready:config.enabled,activeCount:count,accountId:config.accountId,detail:config.enabled?'账号桥接在线':'已暂停接单'});failures=0;
       if(!count&&!tasks.some(t=>!TERMINAL.has(t.state)))delay=12000;
     }catch(error){failures++;delay=Math.min(30000,1000*2**Math.min(5,failures));await setStatus({backend:error.status===401?'unpaired':'offline',ready:false,detail:error.message||String(error)}).catch(()=>{});}
@@ -204,6 +222,11 @@ async function uiOperation(message,sender,isInternal=false){
   if(['ui-open-bridge','ui-prepare-bridge','ui-repair'].includes(op)){
     if(!config.enabled&&op==='ui-prepare-bridge')throw new Error('后台接单已暂停；消息未入队');
     await request('/api/me');
+    const other=(await allLanes()).find(l=>l.accountId===config.accountId&&l.active&&l.conversationId!==message.conversationId);
+    if(other){
+      if(other.bridge?.tabId){await chrome.tabs.update(other.bridge.tabId,{active:true}).catch(()=>{});const tab=await chrome.tabs.get(other.bridge.tabId).catch(()=>null);if(tab)await chrome.windows.update(tab.windowId,{focused:true}).catch(()=>{});}
+      return {ok:true,ready:false,tabId:other.bridge?.tabId,detail:'此账号的唯一工作页正在处理另一会话；当前任务会自动排队'};
+    }
     const result=await ordered(message.conversationId,()=>ensureLane(message.conversationId,{focus:op!=='ui-prepare-bridge'}));
     kick();
     if(op==='ui-prepare-bridge'&&(!result.info.composer||(!result.lane.active&&(result.info.busy||result.info.hasDraft||result.info.activeTask))))throw new Error('本会话工作页尚未就绪、未登录、已有草稿或正在生成。消息未入队；请先点击“打开工作网页”处理后重试');
@@ -219,7 +242,7 @@ chrome.runtime.onMessage.addListener((message,sender,respond)=>{
     if(message?.type==='bridge-event'){if(!chatUrl(sender.url))throw new Error('不可信网页');return forwardEvent(message,sender);}
     if(message?.type==='bridge-hello'){
       if(sender.frameId!==0||!chatUrl(sender.url))throw new Error('不可信网页');
-      const lane=(await allLanes()).find(l=>l.bridge?.tabId===sender.tab?.id);if(lane)kick();return {ok:true,bound:!!lane};
+      const shared=await get(ACCOUNT_TAB),lanes=await allLanes(),lane=lanes.find(l=>l.conversationId===shared?.currentConversationId&&l.bridge?.tabId===sender.tab?.id)||lanes.find(l=>l.active&&l.bridge?.tabId===sender.tab?.id);if(lane)kick();return {ok:true,bound:!!lane};
     }
     if(message?.type==='doubao-web'){if(!await localPage(sender))throw new Error('拒绝非当前本机逗包地址的网页操作');return uiOperation(message,sender);}
     if(!internal(sender))throw new Error('只有扩展设置或本机逗包网页可执行此操作');return uiOperation(message,sender,true);

@@ -107,7 +107,6 @@ async function send(){
   sending=true;updateComposer();banner('');let packet,pk,cid,e;
   try{
     const c=await ensureConversation(text);cid=c.id;e=epoch;
-    if(!p&&provider==='browser'){banner('正在自动打开并唤醒 ChatGPT 工作页，请稍候…');await webWorker('ui-prepare-bridge',{accountId:account.id,conversationId:cid});banner('工作页已就绪，正在提交任务…');}
     if(e!==epoch||cid!==selected)throw new Error('已切换会话，消息未发送');
     packet=p||{requestId:crypto.randomUUID(),conversationId:cid,message:text,model:$('modelSelect').value,attachments:packetAttachments};pk=pendingKey(cid);try{sessionStorage.setItem(pk,JSON.stringify(packet));}catch{throw new Error('图片过大，浏览器无法保存待确认副本；请压缩图片后重试');}updateComposer();
     const response=await apiRequest(config,'/api/tasks',{method:'POST',body:packet,timeout:12000});
@@ -116,7 +115,7 @@ async function send(){
     if(response.accountId!==account.id||response.conversationId!==cid)throw new Error('任务返回的账号或会话不匹配');
     sessionStorage.removeItem(draftKey());if($('input').value.trim()===text||(!$('input').value.trim()&&text==='请查看并分析这张图片。'))$('input').value='';attachments=[];renderAttachments();autosize();
     tasks=tasks.filter(t=>t.id!==response.id).concat(response).sort((a,b)=>a.created-b.created);summaries=[response,...summaries.filter(t=>t.id!==response.id)];renderTasks(true);renderHistory();
-    if(provider==='browser')webWorker('ui-wake',{accountId:account.id,conversationId:cid}).catch(()=>{});
+    if(provider==='browser'){banner('任务已提交，正在自动打开并唤醒 ChatGPT 工作页…');webWorker('ui-wake',{accountId:account.id,conversationId:cid}).catch(()=>{});}
     if(!streams.has(response.id))observe(response,e,{...config});
   }catch(error){
     if(pk&&error.status>=400&&error.status<500&&error.status!==408&&error.status!==429)sessionStorage.removeItem(pk);

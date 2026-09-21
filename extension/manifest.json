@@ -3,7 +3,7 @@
   "name": "逗包 · 多账号后台桥接",
   "version": "1.2.0",
   "minimum_chrome_version": "120",
-  "description": "每个浏览器配置文件绑定一个账号，每个本地会话使用独立 ChatGPT 工作标签页；不使用侧边栏。",
+  "description": "每个浏览器配置文件绑定一个账号，同一账号复用一个 ChatGPT 工作标签页并按顺序执行；不使用侧边栏。",
   "permissions": [
     "storage",
     "alarms",

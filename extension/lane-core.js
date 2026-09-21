@@ -5,7 +5,7 @@ export function chatUrl(raw) {
 export function conversationUrl(raw) {
   if(!chatUrl(raw))return '';
   const u=new URL(raw);
-  return /^\/(?:g\/[A-Za-z0-9_-]+\/)?c\/[A-Za-z0-9_-]+$/.test(u.pathname)?'https://chatgpt.com'+u.pathname:'';
+  return /^\/(?:g\/[A-Za-z0-9_-]+\/)?c\/(?:WEB:)?[A-Za-z0-9_-]+$/.test(u.pathname)?'https://chatgpt.com'+u.pathname:'';
 }
 export function validId(value){return typeof value==='string'&&/^[A-Za-z0-9_-]{8,100}$/.test(value);}
 export function assertTask(task, accountId, conversationId) {

@@ -95,7 +95,7 @@ final class WorkspaceStore {
     static String canonicalChatUrl(String raw){
         try{URI u=URI.create(raw);String host=u.getHost(),path=u.getPath();
             if(!"https".equals(u.getScheme())||!Set.of("chatgpt.com","chat.openai.com").contains(host==null?"":host)||u.getUserInfo()!=null||u.getPort()!=-1)return "";
-            if(!path.matches("/(?:g/[A-Za-z0-9_-]+/)?c/[A-Za-z0-9_-]+"))return "";
+            if(!path.matches("/(?:g/[A-Za-z0-9_-]+/)?c/(?:WEB:)?[A-Za-z0-9_-]+"))return "";
             return "https://chatgpt.com"+path;
         }catch(Exception e){return "";}
     }

@@ -22,7 +22,8 @@ function harness({saved={},session={doubaoSession:'browser-session'},server={}}=
   get:async id=>{if(!tabs.has(id))throw Error('missing tab');return clone(tabs.get(id));},
   create:async({url,active})=>{const id=Math.max(...tabs.keys())+1,tab={id,url,active,windowId:1,autoDiscardable:true};tabs.set(id,tab);pages.set(id,{ok:true,version:VERSION,composer:true,busy:false,hasDraft:false,activeTask:null,documentKey:'doc-'+id,href:url,userCount:url.includes('/c/')?1:0,detail:'fixture ready'});counters.creates.push(id);return clone(tab);},
   reload:async id=>{if(!tabs.has(id))throw Error('missing');tabs.get(id).discarded=false;counters.reloads.push(id);return clone(tabs.get(id));},
-  update:async(id,patch)=>{if(!tabs.has(id))throw Error('missing');Object.assign(tabs.get(id),patch);if('autoDiscardable'in patch)counters.discards.push([id,patch.autoDiscardable]);return clone(tabs.get(id));},
+  remove:async id=>{tabs.delete(id);pages.delete(id);},
+  update:async(id,patch)=>{if(!tabs.has(id))throw Error('missing');Object.assign(tabs.get(id),patch);if(patch.url&&pages.has(id)){const page=pages.get(id);page.href=patch.url;page.userCount=patch.url.includes('/c/')?1:0;page.documentKey='doc-'+id+'-'+counters.requests.length;}if('autoDiscardable'in patch)counters.discards.push([id,patch.autoDiscardable]);return clone(tabs.get(id));},
   sendMessage:async(id,packet)=>{if(packet.type==='jsc-ping')return clone(pages.get(id));if(packet.type==='jsc-run')counters.runs.push({id,packet:clone(packet)});return {ok:true};}}};
  const fetch=async(url,options={})=>{
    const path=new URL(url).pathname,body=options.body?JSON.parse(options.body):{};counters.requests.push({path,body});let value={ok:true},status=200;
@@ -51,18 +52,17 @@ function harness({saved={},session={doubaoSession:'browser-session'},server={}}=
  return {saved,session,server,tasks,conversations,tabs,pages,counters,web,internal,packet,content,boot:context.__test.boot,cycle:()=>context.__test.runCycle()};
 }
 
-test('parallel conversations create distinct tabs; never adopt an existing manual chat',async()=>{
- const h=harness();await h.cycle();assert.equal(h.counters.runs.length,2);
- const a=h.saved['lane:'+C1],b=h.saved['lane:'+C2];assert.notEqual(a.bridge.tabId,b.bridge.tabId);assert.notEqual(a.bridge.tabId,10);
- assert.equal(h.tabs.get(a.bridge.tabId).url,'https://chatgpt.com/');assert.equal(a.active.task.conversationId,C1);
+test('one account serializes conversations through one work tab and never adopts a manual chat',async()=>{
+ const h=harness();await h.cycle();assert.equal(h.counters.runs.length,1);
+ const a=h.saved['lane:'+C1];assert.equal(h.saved['lane:'+C2],undefined);assert.notEqual(a.bridge.tabId,10);assert.equal(h.counters.creates.length,1);
+ h.tasks[0].state='completed';await h.cycle();await h.cycle();const b=h.saved['lane:'+C2];assert.equal(h.counters.runs.length,2);assert.equal(b.bridge.tabId,a.bridge.tabId);assert.equal(h.counters.creates.length,1);
 });
 test('selected model is delivered unchanged to the bound ChatGPT page',async()=>{
  const h=harness();h.tasks[0].model='gpt-6-pro';await h.cycle();const run=h.counters.runs.find(x=>x.packet.task.conversationId===C1);assert.equal(run.packet.task.model,'gpt-6-pro');
 });
-test('concurrent lane outboxes do not overwrite each other',async()=>{
- const h=harness();await h.cycle();const a=h.packet(C1,'A 的回答'),b=h.packet(C2,'B 的回答');
- const results=await Promise.all([h.content(a),h.content(b)]);assert.ok(results.every(x=>x.ok));
- assert.equal(h.tasks[0].text,'A 的回答');assert.equal(h.tasks[1].text,'B 的回答');assert.equal(h.saved['lane:'+C1].active.seq,1);assert.equal(h.saved['lane:'+C2].active.seq,1);
+test('queued second conversation cannot overlap the active account work tab',async()=>{
+ const h=harness();await h.cycle();assert.ok(h.saved['lane:'+C1].active);assert.equal(h.saved['lane:'+C2],undefined);
+ assert.equal(h.counters.runs.filter(x=>x.packet.task.conversationId===C1).length,1);assert.equal(h.counters.runs.filter(x=>x.packet.task.conversationId===C2).length,0);
 });
 test('foreign tab, document, account, conversation and iframe packets are rejected',async()=>{
  const h=harness();await h.cycle();const base=h.packet(C1);
@@ -77,7 +77,7 @@ test('durable outbox replays exactly once after worker restart with same browser
 });
 test('browser restart invalidates persistent numerical tab IDs',async()=>{
  const options={saved:{},session:{doubaoSession:'old'},server:{}};let h=harness(options);await h.cycle();options.session={};h=harness(options);await h.boot;
- assert.equal(h.saved['lane:'+C1].bridge.tabId,null);assert.equal(h.saved['lane:'+C2].bridge.documentKey,null);
+ assert.equal(h.saved['lane:'+C1].bridge.tabId,null);assert.equal(h.saved.accountWorkTab,null);
 });
 test('discarded work tab is automatically reloaded instead of requiring a manual click',async()=>{
  const h=harness();await h.cycle();const id=h.saved['lane:'+C1].bridge.tabId;h.tabs.get(id).discarded=true;await h.cycle();assert.ok(h.counters.reloads.includes(id));assert.equal(h.saved['lane:'+C1].ready,true);
@@ -86,13 +86,13 @@ test('uncertain submitted task is never blindly sent to a replacement blank tab'
  const h=harness();await h.cycle();const lane=h.saved['lane:'+C1];lane.active.task.submitted=true;h.tasks[0].submitted=true;h.tabs.delete(lane.bridge.tabId);
  const count=h.counters.runs.length;await h.cycle();assert.match(h.saved['lane:'+C1].detail,/无法安全恢复/);assert.equal(h.counters.runs.filter(x=>x.packet.task.conversationId===C1).length,1);assert.ok(h.counters.runs.length>=count);
 });
-test('one broken conversation does not stop another conversation',async()=>{
- const h=harness();await h.cycle();const lane=h.saved['lane:'+C1];h.tabs.get(lane.bridge.tabId).url='https://example.org/';const previous=h.counters.runs.filter(x=>x.packet.task.conversationId===C2).length;
- await h.cycle();assert.match(h.saved['lane:'+C1].detail,/离开 ChatGPT/);assert.equal(h.counters.runs.filter(x=>x.packet.task.conversationId===C2).length,previous+1);
+test('a tracked work tab that leaves ChatGPT is replaced without adopting a manual chat',async()=>{
+ const h=harness();await h.cycle();const lane=h.saved['lane:'+C1],old=lane.bridge.tabId;h.tabs.get(old).url='https://example.org/';
+ await h.cycle();assert.notEqual(h.saved['lane:'+C1].bridge.tabId,old);assert.notEqual(h.saved['lane:'+C1].bridge.tabId,10);assert.equal(h.counters.creates.length,2);
 });
 test('cancelled task discards pending outbox and releases only its own work page',async()=>{
  const h=harness();await h.cycle();h.server.failEvent=true;await h.content(h.packet(C1));h.tasks[0].state='cancelled';await h.cycle();
- assert.equal(h.saved['lane:'+C1].active,null);assert.ok(h.saved['lane:'+C2].active);assert.ok(h.counters.discards.some(([id,v])=>id===h.saved['lane:'+C1].bridge.tabId&&v));
+ assert.equal(h.saved['lane:'+C1].active,null);assert.equal(h.saved['lane:'+C2],undefined);assert.ok(h.counters.discards.some(([id,v])=>id===h.saved['lane:'+C1].bridge.tabId&&v));await h.cycle();assert.ok(h.saved['lane:'+C2].active);assert.equal(h.saved['lane:'+C2].bridge.tabId,h.saved['lane:'+C1].bridge.tabId);
 });
 test('web operations require local origin, top frame, correct account and non-incognito profile',async()=>{
  const h=harness();for(const url of ['https://example.org/web/','http://127.0.0.1:49999/web/','http://127.0.0.1:48643/not-web'])assert.equal((await h.web('ui-status',{},url)).ok,false);

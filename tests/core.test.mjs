@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {VERSION,BACKEND_VERSION,browserQueueHint,normalizeBaseUrl,parseSse,taskMarkdown,TERMINAL} from '../extension/shared.js';
+import {conversationUrl} from '../extension/lane-core.js';
 import '../extension/bridge-core.js';
 const core=globalThis.JSCBridgeCore;
 
@@ -34,6 +35,10 @@ test('missing stable id refuses to attach to a different duplicate prompt',()=>{
 });
 test('normalization and fingerprints are stable across NBSP and line endings',()=>{
   assert.equal(core.hash('你好\u00a0世界\r\n测试'),core.hash('你好 世界\n测试'));
+});
+test('accepts current ChatGPT WEB-prefixed conversation ids without widening hosts',()=>{
+  assert.equal(conversationUrl('https://chatgpt.com/c/WEB:c87d90fd-2a2f-42f9-98d7-a6c1d686643a'),'https://chatgpt.com/c/WEB:c87d90fd-2a2f-42f9-98d7-a6c1d686643a');
+  assert.equal(conversationUrl('https://example.com/c/WEB:c87d90fd-2a2f-42f9-98d7-a6c1d686643a'),'');
 });
 async function parseChunks(text,chunkSize){
   const bytes=new TextEncoder().encode(text);let i=0;

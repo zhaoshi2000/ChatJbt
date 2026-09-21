@@ -2,7 +2,7 @@
 (() => {
   const VERSION='1.2.0';
   const documentKey=crypto.randomUUID();
-  function conversationUrl(raw){try{const u=new URL(raw);return u.protocol==='https:'&&['chatgpt.com','chat.openai.com'].includes(u.hostname)&&/^\/(?:g\/[A-Za-z0-9_-]+\/)?c\/[A-Za-z0-9_-]+$/.test(u.pathname)?'https://chatgpt.com'+u.pathname:'';}catch{return '';}}
+  function conversationUrl(raw){try{const u=new URL(raw);return u.protocol==='https:'&&['chatgpt.com','chat.openai.com'].includes(u.hostname)&&/^\/(?:g\/[A-Za-z0-9_-]+\/)?c\/(?:WEB:)?[A-Za-z0-9_-]+$/.test(u.pathname)?'https://chatgpt.com'+u.pathname:'';}catch{return '';}}
   // Re-injection repairs this isolated world without reloading the ChatGPT page.
   try { globalThis.__JSCBridge?.dispose(); } catch {}
   const core=globalThis.JSCBridgeCore;
