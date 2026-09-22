@@ -11,6 +11,23 @@
     const phase=checkpoint.phase || '';
     return !task?.submitted && !['submitting','submitted','observing','finished'].includes(phase) && !!normalize(draft) && normalize(draft)===normalize(task?.message);
   };
+  const afterBaseline = (items, baselineKeys=[]) => {
+    const baseline=new Set(baselineKeys);
+    return items.filter(item=>!baseline.has(item.key));
+  };
+  const toolResponseText = (raw, rendered) => {
+    const source=normalize(raw);
+    return source.includes('tool_call')||source.includes('tool\\_call')?source:normalize(rendered);
+  };
+  const completeToolEnvelope = text => {
+    let value=normalize(text);
+    if(value.startsWith('```'))value=value.replace(/^```(?:json)?\s*/,'').replace(/\s*```$/,'').trim();
+    value=value.replace(/\\([_\[\]{}])/g,'$1');
+    try{
+      const root=JSON.parse(value),calls=Array.isArray(root?.tool_calls)?root.tool_calls:root?.tool_calls?[root.tool_calls]:root?.tool_call?[root.tool_call]:[];
+      return Array.isArray(calls)&&calls.length>0&&calls.every(call=>typeof call?.name==='string'&&(typeof call.arguments==='string'||call.arguments===undefined||call.arguments===null||typeof call.arguments==='object'));
+    }catch{return false;}
+  };
   function mayComplete({text, hasMedia=false, busy, searching, completionAction, stableMs, settleMs = 8000}) {
     return (!!normalize(text)||hasMedia) && !busy && !searching && !!completionAction && stableMs >= settleMs;
   }
@@ -31,5 +48,5 @@
     if(allowNewest&&users.length&&!baseline.has(users.at(-1).key))return users.length-1;
     return -1;
   }
-  globalThis.JSCBridgeCore = Object.freeze({normalize,hash,ownsUnsentDraft,mayComplete,responseBusy,locateUser});
+  globalThis.JSCBridgeCore = Object.freeze({normalize,hash,ownsUnsentDraft,afterBaseline,toolResponseText,completeToolEnvelope,mayComplete,responseBusy,locateUser});
 })();

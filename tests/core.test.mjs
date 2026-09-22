@@ -83,6 +83,20 @@ test('only an extension-owned pre-submit draft may be cleared during recovery',(
   assert.equal(core.ownsUnsentDraft('系统准备的提示词',{...task,submitted:true},{phase:'submitting'}),false);
   assert.equal(core.ownsUnsentDraft('系统准备的提示词',task,{phase:'submitted'}),false);
 });
+test('API assistant fallback ignores replies that existed before submission',()=>{
+  const items=[{key:'id:old',node:'old reply'},{key:'id:new',node:'new reply'}];
+  assert.deepEqual(core.afterBaseline(items,['id:old']),[{key:'id:new',node:'new reply'}]);
+  assert.deepEqual(core.afterBaseline(items,['id:old','id:new']),[]);
+});
+test('tool JSON uses raw DOM text instead of Markdown link reconstruction',()=>{
+  const raw='{"tool\\_calls":\\[{"name":"ls","arguments":{"path":"G:\\\\"}}\\]}';
+  const rendered='[{"tool\\_calls":](https://chatgpt.com/c/wrong)';
+  assert.equal(core.toolResponseText(raw,rendered),raw);
+  assert.equal(core.completeToolEnvelope(raw),true);
+  assert.equal(core.completeToolEnvelope('```json\n{"tool_call":{"name":"ls","arguments":{"path":"G:\\\\"}}}\n```'),true);
+  assert.equal(core.completeToolEnvelope('{"tool_calls":['),false);
+  assert.equal(core.toolResponseText('normal answer','[normal](https://example.com)'), '[normal](https://example.com)');
+});
 test('accepts current ChatGPT WEB-prefixed conversation ids without widening hosts',()=>{
   assert.equal(conversationUrl('https://chatgpt.com/c/WEB:c87d90fd-2a2f-42f9-98d7-a6c1d686643a'),'https://chatgpt.com/c/WEB:c87d90fd-2a2f-42f9-98d7-a6c1d686643a');
   assert.equal(conversationUrl('https://example.com/c/WEB:c87d90fd-2a2f-42f9-98d7-a6c1d686643a'),'');

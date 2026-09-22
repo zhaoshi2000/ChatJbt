@@ -199,14 +199,14 @@ class IsolationTests(unittest.TestCase):
         code,error=b.call('POST','/v1/chat/completions',{'model':'missing','messages':[{'role':'user','content':'hello'}]},a['token'])
         self.assertEqual(code,400);self.assertIn('message',error['error']);self.assertEqual(error['error']['code'],400)
         b.call('POST','/api/bridge/heartbeat',{'clientId':a['clientId'],'ready':True},a['token'])
-        payload={'model':'gbt','messages':[{'role':'system','content':'concise '+('x'*40000)},{'role':'user','content':'OpenClaw hello'},{'role':'user','content':'<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nRuntime metadata, not the user request\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>'}]}
+        payload={'model':'gbt','messages':[{'role':'system','content':'concise '+('x'*40000)},{'role':'user','content':'OpenClaw hello'},{'role':'assistant','content':'','tool_calls':[{'id':'call_ls','type':'function','function':{'name':'list_files','arguments':'{}'}}]},{'role':'tool','tool_call_id':'call_ls','content':'REAL_LOCAL_RESULT: Alpha/ Beta/'},{'role':'user','content':'<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nRuntime metadata, not the user request\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>'}]}
         with cf.ThreadPoolExecutor(max_workers=1) as pool:
             future=pool.submit(b.call,'POST','/v1/chat/completions',payload,a['token']);task=None
             for _ in range(40):
                 rows=b.call('GET','/api/tasks',token=a['token'])[1]['tasks'];task=next((t for t in rows if not t['state'] in ('completed','error','cancelled','interrupted')),None)
                 if task:break
                 time.sleep(.05)
-            self.assertIsNotNone(task);_,claimed=b.poll(a,{'id':task['conversationId']});self.assertLessEqual(len(claimed['task']['message']),20000);self.assertIn('OpenClaw hello',claimed['task']['message']);self.assertEqual(b.event(a,claimed['task'],1,'done',text='OpenClaw ok')[0],200)
+            self.assertIsNotNone(task);_,claimed=b.poll(a,{'id':task['conversationId']});self.assertLessEqual(len(claimed['task']['message']),20000);self.assertIn('OpenClaw hello',claimed['task']['message']);self.assertIn('REAL_LOCAL_RESULT: Alpha/ Beta/',claimed['task']['message']);self.assertIn('[LATEST_TOOL_RESULT]',claimed['task']['message']);self.assertIn('禁止让用户手动执行命令',claimed['task']['message']);self.assertIn('下一轮继续只返回一个 tool_call JSON',claimed['task']['message']);self.assertEqual(b.event(a,claimed['task'],1,'done',text='OpenClaw ok')[0],200)
             code,result=future.result(timeout=5)
         self.assertEqual(code,200);self.assertEqual(result['choices'][0]['message']['content'],'OpenClaw ok');self.assertEqual(result['model'],'gbt')
         tool_payload={'model':'gbt-6-thinking','stream':True,'messages':[{'role':'user','content':'list files'}],'tools':[{'type':'function','function':{'name':'list_files','description':'List files','parameters':{'type':'object','properties':{}}}}]}
@@ -216,8 +216,8 @@ class IsolationTests(unittest.TestCase):
                 rows=b.call('GET','/api/tasks',token=a['token'])[1]['tasks'];task=next((t for t in rows if not t['state'] in ('completed','error','cancelled','interrupted')),None)
                 if task:break
                 time.sleep(.05)
-            self.assertIsNotNone(task);_,claimed=b.poll(a,{'id':task['conversationId']});self.assertEqual(claimed['task']['model'],'gpt-5-6-thinking-standard')
-            self.assertEqual(b.event(a,claimed['task'],1,'done',text='{"tool_calls":[{"name":"list_files","arguments":{"path":"."}}]}')[0],200);code,raw,_=future.result(timeout=5)
+            self.assertIsNotNone(task);_,claimed=b.poll(a,{'id':task['conversationId']});self.assertEqual(claimed['task']['model'],'gpt-5-6-thinking-standard');self.assertIn('[TOOL_PROTOCOL]',claimed['task']['message'])
+            self.assertEqual(b.event(a,claimed['task'],1,'done',text='```json\n{"tool_call":{"name":"list_files","arguments":{"path":"."}}}\n```')[0],200);code,raw,_=future.result(timeout=5)
         self.assertEqual(code,200);text=raw.decode();self.assertIn('"finish_reason":"tool_calls"',text);self.assertIn('"name":"list_files"',text);self.assertTrue(text.rstrip().endswith('data: [DONE]'))
 class OpenAiCompatTests(unittest.TestCase):
     def test_token_models_completion_stream_and_tools(self):

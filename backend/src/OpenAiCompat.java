@@ -52,11 +52,22 @@ final class OpenAiCompat {
     private record Prompt(String text,Set<String> toolNames,int inputChars) {}
     @SuppressWarnings("unchecked") private static Prompt prompt(Map<String,Object> request){
         Object raw=request.get("messages");if(!(raw instanceof List<?> messages)||messages.isEmpty())throw new IllegalArgumentException("messages 必须是非空数组");
-        StringBuilder out=new StringBuilder("你正在通过 GBT 的 OpenAI 兼容接口回答。请遵循下面按角色标记的完整对话。\n\n");int input=0;String latestUser="";
+        StringBuilder out=new StringBuilder("""
+            你正在作为 GBT 的本地智能体模型工作。调用方 OpenBigClaw 能在用户的 Windows 电脑上执行工具。
+            凡是需要读取文件、列目录、运行命令或获取实时本机信息的请求，必须调用下方 AVAILABLE_TOOLS 中最合适的工具，禁止让用户手动执行命令或粘贴结果。
+            每次回复只能是两种形式之一：需要执行工具时，在 json 代码块中只输出一个严格 JSON 命令，不要附加解释：```json
+            {"tool_call":{"name":"工具名","arguments":{}}}
+            ```
+            不需要工具时，才输出给用户阅读的普通文本。
+            调用方会自动执行这一个工具并把结果以 TOOL 角色再次发给你。如果还需要其他操作，下一轮继续只返回一个 tool_call JSON，这个循环可以进行多次；直到信息足够时，再基于真实工具结果输出最终普通文本。收到 TOOL 或 LATEST_TOOL_RESULT 后不得声称没有结果，也不得声称无法访问用户电脑。
+
+            请遵循下面按角色标记的完整对话。
+
+            """);int input=0;String latestUser="",latestTool="";
         for(Object item:messages){
             if(!(item instanceof Map<?,?> source))throw new IllegalArgumentException("messages 项格式无效");Map<String,Object> m=(Map<String,Object>)source;
             String role=Json.str(m,"role","");if(!Set.of("system","developer","user","assistant","tool").contains(role))throw new IllegalArgumentException("不支持的消息角色："+role);
-            String text=content(m.get("content"));if(role.equals("user")&&!isInternalRuntimeContext(text))latestUser=text;input+=text.length();out.append('[').append(role.toUpperCase(Locale.ROOT)).append(']');
+            String text=content(m.get("content"));if(role.equals("user")&&!isInternalRuntimeContext(text))latestUser=text;if(role.equals("tool")&&!text.isBlank())latestTool=text;input+=text.length();out.append('[').append(role.toUpperCase(Locale.ROOT)).append(']');
             String call=Json.str(m,"tool_call_id","");if(!call.isEmpty())out.append(" tool_call_id=").append(call);out.append('\n').append(text).append("\n\n");
             if(m.get("tool_calls") instanceof List<?> calls&&!calls.isEmpty())out.append("[ASSISTANT_TOOL_CALLS]\n").append(Json.stringify(calls)).append("\n\n");
         }
@@ -68,12 +79,14 @@ final class OpenAiCompat {
             if(tools.size()>128)throw new IllegalArgumentException("tools 数量超过限制");
             for(Object item:tools)if(item instanceof Map<?,?> tool&&tool.get("function") instanceof Map<?,?> fn){Object name=fn.get("name");if(name instanceof String s&&s.matches("[A-Za-z0-9_-]{1,64}"))names.add(s);}
             out.append("[AVAILABLE_TOOLS]\n").append(Json.stringify(tools)).append("\n\n")
-               .append("如需调用工具，只输出严格 JSON，不要加 Markdown：{\"tool_calls\":[{\"name\":\"工具名\",\"arguments\":{}}]}。")
-               .append("工具名必须来自 AVAILABLE_TOOLS；不需要工具时正常回答文本。\n");
+               .append("[TOOL_PROTOCOL]\n")
+               .append("需要本机数据或操作时必须调用工具，不要让用户手动执行。每轮只调用一个工具，在 json 代码块中只输出：{\"tool_call\":{\"name\":\"工具名\",\"arguments\":{}}}。")
+               .append("工具名必须来自 AVAILABLE_TOOLS，arguments 必须符合对应参数结构。收到 TOOL 结果后，如果还需要工具就在下一轮继续输出一个 tool_call；信息足够或确实不需要工具时，才输出最终普通文本。\n");
         }
         if(out.length()>MAX_PROMPT_CHARS)throw new IllegalArgumentException("输入超过 GBT 网页桥接的 500000 字符限制");
         String text=out.toString();
         if(text.length()>WEB_PROMPT_CHARS){
+            if(!latestTool.isEmpty())text+="\n\n[LATEST_TOOL_RESULT]\n"+latestTool+"\n";
             if(!latestUser.isEmpty())text+="\n\n[LATEST_USER_REQUEST]\n"+latestUser+"\n";
             int side=(WEB_PROMPT_CHARS-160)/2;
             text=text.substring(0,side)+"\n\n[GBT 已压缩中间历史内容以适配 ChatGPT 网页输入长度；保留了开头规则以及末尾的最新消息和工具定义]\n\n"+text.substring(text.length()-side);
@@ -102,13 +115,23 @@ final class OpenAiCompat {
     @SuppressWarnings("unchecked") private static Answer answer(String text,Set<String> allowed){
         if(allowed.isEmpty())return new Answer(text,List.of(),"stop");String candidate=text.trim();
         if(candidate.startsWith("```")){candidate=candidate.replaceFirst("^```(?:json)?\\s*","").replaceFirst("\\s*```$","").trim();}
+        candidate=removeMarkdownJsonEscapes(candidate);
         try{
-            Object parsed=Json.parse(candidate);if(!(parsed instanceof Map<?,?> root)||!(root.get("tool_calls") instanceof List<?> calls)||calls.isEmpty())return new Answer(text,List.of(),"stop");
+            Object parsed=Json.parse(candidate);if(!(parsed instanceof Map<?,?> root))return new Answer(text,List.of(),"stop");
+            Object rawCalls=root.get("tool_calls");List<?> calls;
+            if(rawCalls instanceof List<?> list)calls=list;
+            else if(rawCalls instanceof Map<?,?> one)calls=List.of(one);
+            else if(root.get("tool_call") instanceof Map<?,?> one)calls=List.of(one);
+            else return new Answer(text,List.of(),"stop");
+            if(calls.isEmpty())return new Answer(text,List.of(),"stop");
             var result=new ArrayList<Map<String,Object>>();for(Object raw:calls){if(!(raw instanceof Map<?,?> call))return new Answer(text,List.of(),"stop");Object name=call.get("name"),arguments=call.get("arguments");
                 if(!(name instanceof String n)||!allowed.contains(n))return new Answer(text,List.of(),"stop");String args=arguments instanceof String s?s:Json.stringify(arguments==null?Map.of():arguments);
                 result.add(Json.map("id","call_"+UUID.randomUUID().toString().replace("-",""),"type","function","function",Json.map("name",n,"arguments",args)));}
             return new Answer(null,result,"tool_calls");
         }catch(Exception ignored){return new Answer(text,List.of(),"stop");}
+    }
+    private static String removeMarkdownJsonEscapes(String value){
+        return value.replace("\\_","_").replace("\\[","[").replace("\\]","]").replace("\\{","{").replace("\\}","}");
     }
     private static Map<String,Object> message(Answer answer){var m=Json.map("role","assistant","content",answer.content());if(!answer.toolCalls().isEmpty())m.put("tool_calls",answer.toolCalls());return m;}
     private static void requireSuccess(Map<String,Object> task){String state=Json.str(task,"state","");if(!state.equals("completed"))throw new TaskStore.Conflict("GBT 生成未完成："+Json.str(task,"detail",state));}

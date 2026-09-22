@@ -40,7 +40,7 @@ function Get-Health([string]$Base) {
     catch { return $null }
 }
 function Assert-OurBackend($Health) {
-    if ($Health.app -ne 'java-stream-chat' -or $Health.version -ne '1.2.0') {
+    if ($Health.app -ne 'java-stream-chat' -or $Health.version -ne '1.2.1') {
         throw 'This port is occupied by an old or different backend. Stop that process explicitly; this script will not kill unrelated processes.'
     }
 }

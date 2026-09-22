@@ -1,7 +1,7 @@
 /* DOM adapter only. No cookies, browser session extraction, private ChatGPT APIs or remote code. */
 (() => {
   const VERSION='1.2.1';
-  const CONTENT_REVISION='2026-09-22.27';
+  const CONTENT_REVISION='2026-09-22.31';
   const documentKey=crypto.randomUUID();
   function conversationUrl(raw){try{const u=new URL(raw);return u.protocol==='https:'&&['chatgpt.com','chat.openai.com'].includes(u.hostname)&&/^\/(?:g\/[A-Za-z0-9_-]+\/)?c\/(?:WEB:)?[A-Za-z0-9_-]+$/.test(u.pathname)?'https://chatgpt.com'+u.pathname:'';}catch{return '';}}
   function stableConversationUrl(raw){const url=conversationUrl(raw);return url&&!/\/c\/WEB:/.test(url)?url:'';}
@@ -53,6 +53,12 @@
     return Array.from(document.querySelectorAll('[data-message-author-role="assistant"]')).filter(node=>
       !!(userNode.compareDocumentPosition(node)&Node.DOCUMENT_POSITION_FOLLOWING));
   }
+  function assistants() {
+    return Array.from(document.querySelectorAll('[data-message-author-role="assistant"]')).map((node,index)=>{
+      const id=node.getAttribute('data-message-id') || node.closest('[data-message-id]')?.getAttribute('data-message-id');
+      const text=elementText(node);return {node,key:id?`id:${id}`:`index:${index}:${core.hash(text)}`};
+    });
+  }
   const mdEscape=text=>String(text||'').replace(/([\\`*_[\]])/g,'\\$1');
   function texOf(node){return node?.querySelector?.('annotation[encoding="application/x-tex"]')?.textContent?.trim()||'';}
   function inlineMarkdown(node){
@@ -90,7 +96,8 @@
   }
   function answerText(node) {
     const markdown=Array.from(node.querySelectorAll('.markdown')).filter(n=>!n.parentElement?.closest('.markdown'));
-    return (markdown.length?markdown.map(blockMarkdown).join('\n\n'):elementText(node)).trim();
+    const raw=elementText(node),rendered=markdown.length?markdown.map(blockMarkdown).join('\n\n'):raw;
+    return core.toolResponseText(raw,rendered).trim();
   }
   function generatedImageSource(src){
     try{
@@ -324,7 +331,7 @@
         if(stopButton())throw new Error('ChatGPT 正在处理另一条请求，未发送当前任务');
         if(core.normalize(composerText(el))&&job.task.conversationId.startsWith('api-'))await clearComposerPersistently(el);
         if(core.normalize(composerText(el)))throw new Error('工作标签页输入框已有草稿，为避免覆盖未发送本任务，请先处理草稿');
-        cp.baselineKeys=users().map(u=>u.key);cp.url=location.href;cp.phase='prepared';
+        cp.baselineKeys=users().map(u=>u.key);cp.baselineAssistantKeys=assistants().map(a=>a.key);cp.url=location.href;cp.phase='prepared';
         await selectModel(job.task.model||'');cp.model=job.task.model||'';
         await emit(job,'checkpoint',{checkpoint:cp});
         await fillComposer(el,job.task.message);
@@ -350,7 +357,7 @@
         const list=users(),apiLane=job.task.conversationId.startsWith('api-'),index=core.locateUser(list,cp,job.task.message,apiLane);
         let nodes=[];
         if(index<0){
-          if(apiLane&&stableConversationUrl(location.href))nodes=Array.from(document.querySelectorAll('[data-message-author-role="assistant"]'));
+          if(apiLane&&stableConversationUrl(location.href))nodes=core.afterBaseline(assistants(),cp.baselineAssistantKeys||[]).map(item=>item.node);
           if(nodes.length){missingSince=0;const durableUrl=stableConversationUrl(location.href);if(durableUrl&&cp.url!==durableUrl){cp.url=durableUrl;cp.phase='observing';await emit(job,'checkpoint',{checkpoint:cp});}}
           else{
           if(!missingSince)missingSince=Date.now();
@@ -367,6 +374,10 @@
             await emit(job,'checkpoint',{checkpoint:cp});
           }
           nodes=assistantAfter(list[index].node);
+          // Some ChatGPT layouts render the assistant turn in a portal whose DOM
+          // order is not comparable with the user node. The submission baseline
+          // still identifies exactly which assistant turns are new for this task.
+          if(apiLane&&!nodes.length)nodes=core.afterBaseline(assistants(),cp.baselineAssistantKeys||[]).map(item=>item.node);
         }
         const newest=nodes.at(-1),userNode=index>=0?list[index].node:null;
         const text=nodes.map(answerText).filter(Boolean).join('\n\n'),media=answerImages(newest,userNode),fileLinks=answerFileLinks(newest,userNode),downloads=answerFileActions(newest,userNode),mediaKey=[...media.map(img=>(img.currentSrc||img.src)+':'+img.naturalWidth+'x'+img.naturalHeight),...fileLinks.map(link=>link.getAttribute('href')||''),...downloads.map(file=>file.name)].join('|');
@@ -380,7 +391,7 @@
         if(progress.detail!==lastDetail||now-lastProgress>12_000){
           await emit(job,'progress',{detail:progress.detail,checkpoint:cp});lastDetail=progress.detail;lastProgress=now;
         }
-        const completionReady=!!completionAction(responseNode),waitingForFile=expectsFile&&!!text&&!hasFile&&!progress.busy&&completionReady;
+        const completionReady=!!completionAction(responseNode)||core.completeToolEnvelope(text),waitingForFile=expectsFile&&!!text&&!hasFile&&!progress.busy&&completionReady;
         if(waitingForFile&&!fileWaitSince)fileWaitSince=now;
         if(!waitingForFile)fileWaitSince=0;
         const wakeKey=(waitingForFile?'file:':'stream:')+text+'\n'+mediaKey;
