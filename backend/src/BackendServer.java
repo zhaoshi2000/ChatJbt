@@ -18,6 +18,7 @@ public final class BackendServer {
     final FileChannel lockChannel;final FileLock lock;
     final ScheduledExecutorService maintenance=Executors.newSingleThreadScheduledExecutor(Thread.ofPlatform().daemon().factory());
     final Map<String,Map<String,Object>> bridges=new ConcurrentHashMap<>();
+    final Map<String,Long> adminSessions=new ConcurrentHashMap<>();
     final Semaphore streams=new Semaphore(64), polls=new Semaphore(64), requests=new Semaphore(256);
     volatile boolean stopping;
     BackendServer()throws Exception{
@@ -44,7 +45,7 @@ public final class BackendServer {
     }
     void start(){
         server.start();
-        maintenance.scheduleWithFixedDelay(()->{try{store.sweep();bridges.entrySet().removeIf(e->System.currentTimeMillis()-Json.num(e.getValue(),"lastSeen",0)>180_000);}catch(Exception e){System.err.println("[ERROR] Maintenance failed: "+e.getClass().getSimpleName());}},1,1,TimeUnit.SECONDS);
+        maintenance.scheduleWithFixedDelay(()->{try{long now=System.currentTimeMillis();store.sweep();bridges.entrySet().removeIf(e->now-Json.num(e.getValue(),"lastSeen",0)>180_000);adminSessions.entrySet().removeIf(e->e.getValue()<now);}catch(Exception e){System.err.println("[ERROR] Maintenance failed: "+e.getClass().getSimpleName());}},1,1,TimeUnit.SECONDS);
         for(var t:store.all())if(t.state.equals("queued"))upstream.submit(t);
         System.out.println("GBT "+VERSION+"  |  Java "+Runtime.version().feature());
         System.out.println("Listening: http://127.0.0.1:"+config.port+"  |  provider="+config.provider);
@@ -84,6 +85,19 @@ public final class BackendServer {
                     if(!workspaces.accounts.isEmpty())throw new TaskStore.Conflict("已经创建过账号。请复制当前聊天页保存的账号令牌，或到账号管理中重置令牌。");
                     send(x,201,workspaces.createAccount(name));
                 }return;
+            }
+            if(path.startsWith("/api/admin-console/")){
+                if(!validAdminSession(x)){send(x,401,Json.map("error","本机管理会话已过期，请刷新后台控制台"));return;}
+                var admin=new WorkspaceStore.Principal(true,"");
+                if(path.equals("/api/admin-console/accounts")){
+                    if(method.equals("GET")){send(x,200,Json.map("accounts",workspaces.accountList(admin)));return;}
+                    require(method,"POST");var m=body(x);synchronized(workspaceLock){send(x,201,workspaces.createAccount(Json.str(m,"name","")));}return;
+                }
+                if(path.matches("/api/admin-console/accounts/[A-Za-z0-9_-]+/rotate")){
+                    require(method,"POST");body(x);String id=path.split("/")[4];synchronized(workspaceLock){if(store.hasLive(id,null))throw new TaskStore.Conflict("此账号仍有未结束任务，先停止任务再重新绑定");send(x,200,workspaces.rotate(id));bridges.entrySet().removeIf(e->id.equals(Json.str(e.getValue(),"accountId","")));}return;
+                }
+                if(path.equals("/api/admin-console/legacy-export")){require(method,"GET");send(x,200,Json.map("note","旧版单任务记录；未推断所属上游账号，也未自动并入新账号","tasks",store.list("legacy-archive",null,true)));return;}
+                send(x,404,Json.map("error","Not found"));return;
             }
             var principal=workspaces.authenticate(x.getRequestHeaders().getFirst("Authorization"),token);
             if(principal==null){send(x,401,Json.map("error","令牌无效。首次使用请用 data/local-token.txt 创建账号；已有账号请用该账号专属令牌。"));return;}
@@ -234,6 +248,15 @@ public final class BackendServer {
         var t=store.task(id);if(!principal.admin()&&!principal.accountId().equals(t.accountId))throw new TaskStore.Missing("任务不存在");return t;
     }
     List<Map<String,Object>> visibleBridges(String accountId,long ttl){return bridges.values().stream().filter(b->(accountId==null||accountId.equals(Json.str(b,"accountId","")))&&System.currentTimeMillis()-Json.num(b,"lastSeen",0)<ttl).toList();}
+    boolean validAdminSession(HttpExchange x){
+        String cookie=x.getRequestHeaders().getFirst("Cookie");if(cookie==null)return false;
+        for(String item:cookie.split(";")){String[] pair=item.trim().split("=",2);if(pair.length==2&&pair[0].equals("GBT_ADMIN_SESSION")){Long expires=adminSessions.get(pair[1]);return expires!=null&&expires>=System.currentTimeMillis();}}
+        return false;
+    }
+    void issueAdminSession(HttpExchange x){
+        byte[] random=new byte[32];new SecureRandom().nextBytes(random);String id=Base64.getUrlEncoder().withoutPadding().encodeToString(random);adminSessions.put(id,System.currentTimeMillis()+28_800_000L);
+        x.getResponseHeaders().add("Set-Cookie","GBT_ADMIN_SESSION="+id+"; HttpOnly; SameSite=Strict; Path=/api/admin-console; Max-Age=28800");
+    }
     boolean security(HttpExchange x)throws IOException{
         if(x.getRemoteAddress()==null||!x.getRemoteAddress().getAddress().isLoopbackAddress()){send(x,403,Json.map("error","Loopback only"));return false;}
         String host=x.getRequestHeaders().getFirst("Host");
@@ -315,6 +338,7 @@ public final class BackendServer {
         if(stream==null){Path file=Path.of("web",name);if(Files.isRegularFile(file))stream=Files.newInputStream(file);}
         if(stream==null){send(x,404,Json.map("error","UI assets missing; run build.bat"));return;}
         byte[] bytes;try(InputStream in=stream){bytes=in.readAllBytes();}
+        if(name.equals("admin.html"))issueAdminSession(x);
         String type=name.endsWith(".css")?"text/css":name.endsWith(".js")?"text/javascript":name.endsWith(".svg")?"image/svg+xml":name.endsWith(".png")?"image/png":"text/html";
         x.getResponseHeaders().set("Content-Type",type+(type.startsWith("text/")||type.endsWith("svg+xml")?"; charset=utf-8":""));
         x.getResponseHeaders().set("Content-Security-Policy","default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
