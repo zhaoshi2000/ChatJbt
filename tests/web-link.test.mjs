@@ -17,6 +17,9 @@ test('web connector is invisible and adds no document UI',()=>{
   const h=harness();assert.equal(h.document.documentElement.dataset.doubaoLink,'1.2.1');
   assert.equal(Object.keys(h.document).length,1);
 });
+test('connector is available on the separate background console',()=>{
+  const h=harness('/web/admin.html');assert.equal(h.document.documentElement.dataset.doubaoLink,'1.2.1');
+});
 test('content connector ignores messages from other frames or origins',async()=>{
   const h=harness();const packet={channel:'doubao.web.request',id:'request-1',operation:'ui-open-bridge'};
   await h.send(packet,{origin:'https://www.msn.com'});await h.send(packet,{source:{}});assert.equal(h.sent.length,0);

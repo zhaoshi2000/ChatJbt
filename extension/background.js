@@ -318,7 +318,7 @@ async function pair(next){
 }
 async function localPage(sender){
   if(sender.id!==chrome.runtime.id||sender.frameId!==0||!sender.tab||sender.tab.incognito)return false;
-  try{const u=new URL(sender.url),config=await settings();return ['127.0.0.1','localhost'].includes(u.hostname)&&u.protocol==='http:'&&u.port===new URL(config.backendUrl).port&&['/web/','/web/app.html','/','/app.html'].includes(u.pathname);}catch{return false;}
+  try{const u=new URL(sender.url),config=await settings();return ['127.0.0.1','localhost'].includes(u.hostname)&&u.protocol==='http:'&&u.port===new URL(config.backendUrl).port&&['/web/','/web/app.html','/web/admin.html','/','/app.html'].includes(u.pathname);}catch{return false;}
 }
 async function uiStatus(id){
   const config=await settings(),lane=validId(id)?await loadLane(id):null;

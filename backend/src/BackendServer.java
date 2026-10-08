@@ -310,7 +310,7 @@ public final class BackendServer {
             x.getResponseHeaders().set("Location","/web/");x.sendResponseHeaders(302,-1);return;
         }
         String name=path.equals("/web/")?"app.html":path.startsWith("/web/")?path.substring(5):path.substring(1);
-        if(!Set.of("app.html","app.css","app.js","shared.js","web-rpc.js","render.js","icon.svg","avatar.png").contains(name)){send(x,404,Json.map("error","Not found"));return;}
+        if(!Set.of("app.html","app.css","app.js","admin.html","admin.css","admin.js","shared.js","web-rpc.js","render.js","icon.svg","avatar.png").contains(name)){send(x,404,Json.map("error","Not found"));return;}
         InputStream stream=BackendServer.class.getResourceAsStream("/ui/"+name);
         if(stream==null){Path file=Path.of("web",name);if(Files.isRegularFile(file))stream=Files.newInputStream(file);}
         if(stream==null){send(x,404,Json.map("error","UI assets missing; run build.bat"));return;}

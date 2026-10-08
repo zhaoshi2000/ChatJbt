@@ -2,7 +2,7 @@
  * checks exact configured port, top frame and path for EVERY request. */
 (() => {
   if (window !== window.top || window.__doubaoLocalLink) return;
-  if (!['/web/', '/web/app.html', '/', '/app.html'].includes(location.pathname)) return;
+  if (!['/web/', '/web/app.html', '/web/admin.html', '/', '/app.html'].includes(location.pathname)) return;
   window.__doubaoLocalLink = true;
   const allowed = new Set(['ui-status','web-pair','ui-open-bridge','ui-prepare-bridge','ui-repair','ui-unbind','ui-wake','ui-download-file','ui-show-work-window','ui-hide-work-window']);
   const inflight = new Set();
