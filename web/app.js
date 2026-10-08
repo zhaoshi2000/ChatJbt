@@ -3,11 +3,12 @@ import {webWorker} from './web-rpc.js';
 import {renderMarkdown} from './render.js';
 const $=id=>document.getElementById(id),KEY='doubao.v12.connection';
 const parse=(s,fallback)=>{try{return JSON.parse(s)||fallback;}catch{return fallback;}};
-let saved=parse(localStorage.getItem(KEY),{}),config={backendUrl:location.origin,token:saved.token||'',enabled:saved.enabled!==false};
+let saved=parse(localStorage.getItem(KEY),{}),config={backendUrl:location.origin,enabled:saved.enabled!==false};
+if(saved.token){delete saved.token;localStorage.setItem(KEY,JSON.stringify(saved));}
 let account=null,provider='browser',conversations=[],summaries=[],tasks=[],current=null,epoch=0,refreshing=false,sending=false,mode='chat',toastTimer,attachments=[],openHistoryMenu=null,actionConversationId='',bannerTaskId='',dialogDeleteArmed=false;
 let selected=new URL(location.href).searchParams.get('c')||'',createDraftId='';
 const streams=new Map();
-let lastAuth=0,newCredential=null;
+let lastAuth=0,sessionRequest=null;
 const validId=id=>/^[A-Za-z0-9_-]{8,100}$/.test(id||'');
 const modelLabel=value=>({'gpt-5-6':'6 · 即时','gpt-5-6-thinking':'6 · 中','gpt-5-6-thinking-standard':'6 · 中','gpt-5-6-thinking-extended':'6 · 高','gpt-5-6-thinking-max':'6 · 极高','gpt-5-6-pro':'6 Pro','gpt-6-pro':'6 Pro'}[value]||'当前模型');
 if(!validId(selected))selected='';
@@ -60,17 +61,22 @@ function renderTasks(forceBottom=false){const box=$('conversation'),stick=forceB
 }
 async function copyText(text){try{await navigator.clipboard.writeText(text);toast('已复制');}catch{toast('复制被浏览器阻止，请手动选择文本复制');}}
 function formatBytes(value){const n=Number(value)||0;return n<1024?n+' B':n<1024*1024?(n/1024).toFixed(1)+' KB':(n/1024/1024).toFixed(1)+' MB';}
-async function downloadTaskFile(task,file,button){const content=button.innerHTML;button.disabled=true;button.textContent='正在下载…';try{const response=await fetch(config.backendUrl+'/api/tasks/'+encodeURIComponent(task.id)+'/files/'+encodeURIComponent(file.id),{headers:{Authorization:'Bearer '+config.token},credentials:'omit',redirect:'error',cache:'no-store'});if(!response.ok)throw new Error('下载失败：HTTP '+response.status);const blob=await response.blob(),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=file.name||'生成文件';a.click();setTimeout(()=>URL.revokeObjectURL(url),5000);toast('已下载 '+a.download);}catch(error){banner(error.message);}finally{button.disabled=false;button.innerHTML=content;}}
+async function downloadTaskFile(task,file,button){const content=button.innerHTML;button.disabled=true;button.textContent='正在下载…';try{const response=await fetch(config.backendUrl+'/api/tasks/'+encodeURIComponent(task.id)+'/files/'+encodeURIComponent(file.id),{credentials:'same-origin',redirect:'error',cache:'no-store'});if(!response.ok)throw new Error('下载失败：HTTP '+response.status);const blob=await response.blob(),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=file.name||'生成文件';a.click();setTimeout(()=>URL.revokeObjectURL(url),5000);toast('已下载 '+a.download);}catch(error){banner(error.message);}finally{button.disabled=false;button.innerHTML=content;}}
 async function downloadRemoteFile(task,file,button){const content=button.innerHTML;button.disabled=true;button.textContent='正在调用浏览器下载…';try{await webWorker('ui-download-file',{accountId:account.id,conversationId:task.conversationId,taskId:task.id,fileName:file.name});toast('浏览器已开始下载 '+file.name);}catch(error){banner(error.message);}finally{button.disabled=false;button.innerHTML=content;}}
 function renderAttachments(){$('attachmentTray').replaceChildren();for(const [index,a] of attachments.entries()){const chip=document.createElement('div');chip.className='attachment-chip';const img=document.createElement('img');img.src=`data:${a.mimeType};base64,${a.base64}`;img.alt=a.name;const remove=document.createElement('button');remove.type='button';remove.textContent='×';remove.title='移除图片';remove.addEventListener('click',()=>{attachments.splice(index,1);renderAttachments();updateComposer();});chip.append(img,remove);$('attachmentTray').append(chip);}$('attachmentTray').hidden=!attachments.length;updateComposer();}
 async function addImages(files){const allowed=new Set(['image/png','image/jpeg','image/webp','image/gif']);try{for(const file of files){if(attachments.length>=3)throw new Error('每条消息最多附带 3 张图片');if(!allowed.has(file.type))throw new Error('仅支持 PNG、JPEG、WebP 或 GIF 图片');if(file.size>1_500_000)throw new Error('单张图片须小于 1.5 MB');if(attachments.reduce((n,a)=>n+a.bytes,0)+file.size>1_800_000)throw new Error('每条消息的图片总大小须小于 1.8 MB');const dataUrl=await new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(String(reader.result));reader.onerror=()=>reject(new Error('图片读取失败'));reader.readAsDataURL(file);});attachments.push({name:file.name.slice(0,120).replace(/[\\/]/g,'_')||'图片',mimeType:file.type,base64:dataUrl.slice(dataUrl.indexOf(',')+1),bytes:file.size});}renderAttachments();}catch(error){banner(error.message);}}
 function download(name,text,type='text/plain;charset=utf-8'){const url=URL.createObjectURL(new Blob([text],{type}));const a=document.createElement('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),2000);}
+async function establishWebSession(){
+  if(sessionRequest)return sessionRequest;
+  sessionRequest=(async()=>{const grant=await webWorker('ui-web-session');const connected=await apiRequest(config,'/api/web-session/exchange',{method:'POST',body:{code:grant.code},credentials:'same-origin'});saved={backendUrl:location.origin,enabled:config.enabled,accountId:connected.account.id};localStorage.setItem(KEY,JSON.stringify(saved));return connected;})();
+  try{return await sessionRequest;}finally{sessionRequest=null;}
+}
 async function loadIdentity(){
-  const myEpoch=epoch,local={...config};
-  if(!local.token){account=null;$('connection').textContent='未连接';$('connection').classList.remove('online');renderHeader();return false;}
-  const me=await apiRequest(local,'/api/me');if(myEpoch!==epoch)return false;
+  const myEpoch=epoch,local={...config};let me;
+  try{me=await apiRequest(local,'/api/me');}catch(error){if(error.status!==401)throw error;await establishWebSession();me=await apiRequest(local,'/api/me');}
+  if(myEpoch!==epoch)return false;
   if(me.version!==VERSION)throw new Error('请同时更新后端、网页和扩展到 '+VERSION+'，旧后端不支持账号隔离');
-  if(me.role!=='account')throw new Error('这是管理员令牌，请先在“账号管理”创建账号，再使用账号专属令牌连接');
+  if(me.role!=='account')throw new Error('当前浏览器没有账号会话，请在后台控制台绑定账号');
   account=me.account;provider=me.provider;lastAuth=Date.now();$('connection').textContent='后端在线';$('connection').classList.add('online');renderHeader();return true;
 }
 async function select(id){saveDraft();epoch++;selected=id;createDraftId='';clearCurrent();restoreDraft();$('sidebar').classList.remove('open');$('shade').hidden=true;renderHistory();banner('');await refresh(true);}
@@ -103,7 +109,7 @@ async function refresh(force=false){
 }
 async function observe(task,e,local){
   const controller=new AbortController();streams.set(task.id,controller);let lastActivity=Date.now();const watchdog=setInterval(()=>{if(Date.now()-lastActivity>35000)controller.abort();},5000);
-  try{const response=await fetch(local.backendUrl+'/api/tasks/'+task.id+'/events',{headers:{Authorization:'Bearer '+local.token,Accept:'text/event-stream'},signal:controller.signal,credentials:'omit',redirect:'error',cache:'no-store'});if(!response.ok||!response.body)throw new Error('实时订阅暂不可用');
+  try{const response=await fetch(local.backendUrl+'/api/tasks/'+task.id+'/events',{headers:{Accept:'text/event-stream'},signal:controller.signal,credentials:'same-origin',redirect:'error',cache:'no-store'});if(!response.ok||!response.body)throw new Error('实时订阅暂不可用');
     for await(const frame of parseSse(response.body,()=>lastActivity=Date.now())){if(e!==epoch||selected!==task.conversationId)break;const snapshot=JSON.parse(frame.data);if(snapshot.accountId!==account?.id||snapshot.conversationId!==selected||snapshot.id!==task.id)throw new Error('拒绝不属于本会话的流式消息');const previous=tasks.find(t=>t.id===snapshot.id);if(!previous||snapshot.version>=previous.version){tasks=tasks.filter(t=>t.id!==snapshot.id).concat(snapshot).sort((a,b)=>a.created-b.created);renderTasks();}if(TERMINAL.has(snapshot.state)){clearTaskBanner(snapshot.id);break;}}
   }catch(error){if(e===epoch&&!controller.signal.aborted)console.warn('Stream will resume from backend snapshot:',error.message);}
   finally{clearInterval(watchdog);if(streams.get(task.id)===controller)streams.delete(task.id);controller.abort();}
@@ -138,41 +144,23 @@ async function send(){
   }finally{sending=false;updateComposer();saveDraft();}
 }
 async function openWork(){if(!account){openSettings();return;}try{const c=await ensureConversation();const s=await webWorker('ui-open-bridge',{accountId:account.id,conversationId:c.id});banner(s.ready?'工作网页已就绪，切回这里继续聊天即可。':'工作网页已打开，请在其中登录对应账号并等待输入框出现。');}catch(error){banner(error.message);}}
-function syncTokenActions(){const empty=!$('token').value.trim();$('copyCurrentToken').disabled=empty;$('copyOpenClawConfig').disabled=empty;}
-async function copyOpenClawConfig(){const token=$('token').value.trim();if(!token)return;const provider={baseUrl:location.origin+'/v1',apiKey:token,api:'openai-completions',timeoutSeconds:1200,models:[{id:'gbt',name:'GBT Browser',reasoning:false,input:['text'],cost:{input:0,output:0,cacheRead:0,cacheWrite:0},contextWindow:32000,maxTokens:16000}]},value={agents:{defaults:{model:{primary:'gbt/gbt'}}},models:{mode:'merge',providers:{gbt:provider}}};await copyText(JSON.stringify(value,null,2));result('settingsResult','OpenClaw 配置已复制。将它合并到 OpenClaw 配置后，使用模型 gbt/gbt。');}
-function openSettings(){$('backendUrl').value=location.origin;$('token').value=config.token;$('enabled').checked=config.enabled;$('quickSetup').hidden=!!config.token;syncTokenActions();result('settingsResult',config.token?'当前账号令牌可直接复制并粘贴到 GPT 桥接模块。':'');showDialog('settingsDialog');}
+function openSettings(){$('backendUrl').value=location.origin;$('enabled').checked=config.enabled;$('automaticAccount').textContent=account?'已自动连接：'+account.name:'正在自动识别当前浏览器账号…';result('settingsResult','');showDialog('settingsDialog');}
 function openAdmin(){if($('settingsDialog').open)$('settingsDialog').close();window.open('/web/admin.html','gbt-background-console','noopener');}
-function clearAdmin(){$('adminToken').value='';$('createdToken').value='';$('credentialBox').hidden=true;newCredential=null;$('accountsList').replaceChildren();}
-async function quickCreate(){const button=$('quickCreate');button.disabled=true;result('settingsResult','正在创建第一个账号…');try{const response=await apiRequest({backendUrl:location.origin},'/api/bootstrap-account',{method:'POST',body:{name:$('quickAccountName').value}});newCredential=response;$('token').value=response.token;$('quickSetup').hidden=true;$('confirmProfile').checked=false;syncTokenActions();await copyText(response.token);result('settingsResult','已创建 '+response.account.name+'，账号令牌已填入并复制。请勾选配置文件确认后保存配对，也可粘贴到 GPT 桥接模块。');}catch(error){result('settingsResult',error.message,true);}finally{button.disabled=false;}}
-async function saveConnection(event){event.preventDefault();$('pairButton').disabled=true;result('settingsResult','正在验证账号…');
-  const next={backendUrl:location.origin,token:$('token').value.trim(),enabled:$('enabled').checked};
-  try{const me=await apiRequest(next,'/api/me');if(me.role!=='account')throw new Error('这是管理员令牌。点击“首次使用：创建账号”，创建后再用账号专属令牌配对');if(me.version!==VERSION)throw new Error('组件版本不匹配，请完整更新至 '+VERSION);
-    let bridgeError='';
-    if(me.provider==='browser')try{await webWorker('web-pair',{token:next.token,enabled:next.enabled,confirmProfile:$('confirmProfile').checked,profileLabel:me.account.name});}catch(error){bridgeError=error.message;}
-    // Do not silently connect a webpage to a different account than its profile.
-    if(bridgeError.includes('另一个账号')||bridgeError.includes('其他账号')||bridgeError.includes('其他浏览器')||bridgeError.includes('另一个浏览器')||bridgeError.includes('不一致'))throw new Error(bridgeError);
-    saveDraft();epoch++;config=next;account=me.account;provider=me.provider;selected='';clearCurrent();conversations=[];summaries=[];renderHistory();restoreDraft();
-    localStorage.setItem(KEY,JSON.stringify({...next,accountId:account.id}));lastAuth=0;
-    result('settingsResult',bridgeError?'网页账号已连接；扩展仍未配对：'+bridgeError:'已连接 '+account.name+'。可以关闭设置开始聊天。',!!bridgeError);
-    await refresh(true);
+async function saveConnection(event){event.preventDefault();$('pairButton').disabled=true;result('settingsResult','正在自动连接当前账号…');
+  const next={backendUrl:location.origin,enabled:$('enabled').checked};
+  try{await webWorker('ui-set-enabled',{enabled:next.enabled});config=next;await establishWebSession();const me=await apiRequest(config,'/api/me');if(me.version!==VERSION)throw new Error('组件版本不匹配，请完整更新至 '+VERSION);
+    saveDraft();epoch++;account=me.account;provider=me.provider;selected='';clearCurrent();conversations=[];summaries=[];renderHistory();restoreDraft();localStorage.setItem(KEY,JSON.stringify({...next,accountId:account.id}));lastAuth=0;$('automaticAccount').textContent='已自动连接：'+account.name;result('settingsResult','连接成功，不需要任何令牌。');await refresh(true);
   }catch(error){result('settingsResult',error.message,true);}finally{$('pairButton').disabled=false;}
 }
-const adminConfig=()=>({backendUrl:location.origin,token:$('adminToken').value.trim()});
-async function showCredential(response){newCredential=response;$('createdAccountTitle').textContent=response.account.name+' · 专属令牌';$('createdToken').value=response.token;$('credentialBox').hidden=false;result('adminResult','请保存专属令牌；不同账号要放在不同浏览器配置文件中。');}
-async function createAccount(){$('createAccount').disabled=true;try{await showCredential(await apiRequest(adminConfig(),'/api/accounts',{method:'POST',body:{name:$('newAccountName').value}}));$('newAccountName').value='';await loadAccounts();}catch(error){result('adminResult',error.message,true);}finally{$('createAccount').disabled=false;}}
-async function loadAccounts(){try{const r=await apiRequest(adminConfig(),'/api/accounts');$('accountsList').replaceChildren();for(const a of r.accounts){const row=document.createElement('div');row.className='account-row';const title=document.createElement('span');title.textContent=a.name;const note=document.createElement('small');note.textContent=a.clientId?'已绑定独立配置文件 · '+(a.profileLabel||a.clientId.slice(0,8)):'尚未绑定浏览器';title.append(note);const actions=document.createElement('span');actions.className='account-actions';const show=document.createElement('button');show.textContent='显示工作浏览器';show.disabled=!a.clientId;show.addEventListener('click',async()=>{try{await webWorker('ui-show-work-window',{accountId:a.id});result('adminResult','已显示 '+a.name+' 的 ChatGPT 工作窗口。');}catch(e){result('adminResult','请在 '+a.name+' 对应的独立浏览器配置文件里打开本控制台：'+e.message,true);}});const hide=document.createElement('button');hide.textContent='隐藏到后台';hide.disabled=!a.clientId;hide.addEventListener('click',async()=>{try{await webWorker('ui-hide-work-window',{accountId:a.id});result('adminResult','已将 '+a.name+' 的工作窗口最小化。');}catch(e){result('adminResult','请在 '+a.name+' 对应的独立浏览器配置文件里操作：'+e.message,true);}});const reset=document.createElement('button');reset.textContent='重置令牌与绑定';reset.addEventListener('click',async()=>{if(!confirm('重置 '+a.name+' 的令牌和浏览器绑定？旧令牌将失效，历史记录保留。'))return;try{await showCredential(await apiRequest(adminConfig(),'/api/accounts/'+a.id+'/rotate',{method:'POST',body:{}}));await loadAccounts();}catch(e){result('adminResult',e.message,true);}});actions.append(show,hide,reset);row.append(title,actions);$('accountsList').append(row);}}catch(error){result('adminResult',error.message,true);}}
 function conversationMarkdown(conversation=current,rows=tasks){return '# '+(conversation?.title||'GBT 会话')+'\n\n账号：'+(account?.name||'')+'\n会话 ID：'+(conversation?.id||selected)+'\n\n'+rows.map(t=>taskMarkdown(t)).join('\n\n---\n\n');}
 async function shareConversation(id){try{const detail=await apiRequest(config,`/api/conversations/${id}/tasks`),text=conversationMarkdown(detail.conversation,detail.tasks),title=detail.conversation.title;if(navigator.share)try{await navigator.share({title,text});return;}catch(error){if(error.name==='AbortError')return;}await copyText(text);toast('会话内容已复制，可以粘贴分享');}catch(error){toast(error.message);}}
 async function setPinned(id,pinned){try{await apiRequest(config,'/api/conversations/'+id,{method:'POST',body:{pinned}});toast(pinned?'已置顶':'已取消置顶');await refresh(true);}catch(error){toast(error.message);}}
 async function deleteConversation(id){try{await apiRequest(config,'/api/conversations/'+id,{method:'DELETE'});if($('conversationDialog').open)$('conversationDialog').close();if(id===selected)await select('');else await refresh(true);}catch(error){toast(error.message);}}
 function suggestions(){const samples=mode==='chat'?['帮我把今天的想法整理成一份清单','一起构思一个有趣的科幻故事','给我讲清楚一个复杂的概念','帮我润色这段话，让表达更自然']:['把需求拆成可执行的开发任务','检查这段代码的边界条件与潜在问题','把会议记录整理成决策和待办','为这周的项目写一份工作总结'];$('suggestions').replaceChildren();for(const text of samples){const b=document.createElement('button');b.textContent=text;b.addEventListener('click',()=>{if(pending())return;$('input').value=text;saveDraft();autosize();$('input').focus();});$('suggestions').append(b);}}
-$('settingsForm').addEventListener('submit',saveConnection);$('token').addEventListener('input',syncTokenActions);$('quickCreate').addEventListener('click',quickCreate);$('copyCurrentToken').addEventListener('click',()=>copyText($('token').value.trim()));$('copyOpenClawConfig').addEventListener('click',copyOpenClawConfig);$('createAccount').addEventListener('click',createAccount);$('loadAccounts').addEventListener('click',loadAccounts);
+$('settingsForm').addEventListener('submit',saveConnection);
 $('attachImage').addEventListener('click',()=>$('imageInput').click());$('imageInput').addEventListener('change',()=>{addImages($('imageInput').files);$('imageInput').value='';});$('input').addEventListener('paste',event=>{const files=Array.from(event.clipboardData?.files||[]).filter(f=>f.type.startsWith('image/'));if(files.length){event.preventDefault();addImages(files);}});$('modelSelect').value=sessionStorage.getItem('doubao.v12.model')||'';$('modelSelect').addEventListener('change',()=>{sessionStorage.setItem('doubao.v12.model',$('modelSelect').value);toast('将使用 '+modelLabel($('modelSelect').value));});
-$('copyAccountToken').addEventListener('click',()=>copyText($('createdToken').value));$('useAccount').addEventListener('click',()=>{if(!newCredential)return;const value=newCredential.token;$('adminDialog').close();openSettings();$('token').value=value;$('confirmProfile').checked=false;result('settingsResult','请确认这个浏览器配置文件属于所选账号，再保存并配对。');});
-$('adminDialog').addEventListener('close',clearAdmin);
-$('legacyExport').addEventListener('click',async()=>{try{const r=await apiRequest(adminConfig(),'/api/legacy-export');download('GBT-旧版归档.json',JSON.stringify(r,null,2),'application/json');}catch(e){result('adminResult',e.message,true);}});
 $('diagnostics').addEventListener('click',async()=>{try{download('GBT-本账号诊断.json',JSON.stringify(await apiRequest(config,'/api/diagnostics'),null,2),'application/json');}catch(e){result('settingsResult',e.message,true);}});
-$('forget').addEventListener('click',()=>{if(!confirm('只清除此浏览器配置文件中的 GBT 网页连接设置？不会停止后台任务或删除历史。'))return;localStorage.removeItem(KEY);location.reload();});
+$('reconnect').addEventListener('click',async()=>{try{result('settingsResult','正在重新建立自动连接…');await establishWebSession();lastAuth=0;await refresh(true);$('automaticAccount').textContent=account?'已自动连接：'+account.name:'自动连接尚未完成';result('settingsResult','自动连接已刷新。');}catch(error){result('settingsResult',error.message,true);}});
 for(const id of ['accountCard','settingsButton','welcomeConnect'])$(id).addEventListener('click',openSettings);
 $('openAdmin').addEventListener('click',openAdmin);$('fromSettingsAdmin').addEventListener('click',openAdmin);
 for(const b of document.querySelectorAll('[data-close]'))b.addEventListener('click',()=>$(b.dataset.close).close());
@@ -191,7 +179,7 @@ for(const b of document.querySelectorAll('[data-template]'))b.addEventListener('
 $('showSidebar').addEventListener('click',()=>{$('sidebar').classList.add('open');$('shade').hidden=false;});function hideSidebar(){$('sidebar').classList.remove('open');$('shade').hidden=true;}$('closeSidebar').addEventListener('click',hideSidebar);$('shade').addEventListener('click',hideSidebar);
 window.addEventListener('pagehide',()=>{saveDraft();abortStreams();});
 document.addEventListener('click',closeHistoryMenu);document.addEventListener('keydown',event=>{if(event.key==='Escape')closeHistoryMenu();});
-window.addEventListener('storage',e=>{if(e.key!==KEY)return;saveDraft();epoch++;saved=parse(e.newValue,{});config={backendUrl:location.origin,token:saved.token||'',enabled:saved.enabled!==false};account=null;conversations=[];summaries=[];clearCurrent();renderHistory();lastAuth=0;banner('连接设置已在另一个网页更新，正在重新校验账号。');refresh(true).then(restoreDraft);});
+window.addEventListener('storage',e=>{if(e.key!==KEY)return;saveDraft();epoch++;saved=parse(e.newValue,{});config={backendUrl:location.origin,enabled:saved.enabled!==false};account=null;conversations=[];summaries=[];clearCurrent();renderHistory();lastAuth=0;banner('连接设置已在另一个网页更新，正在重新校验账号。');refresh(true).then(restoreDraft);});
 window.addEventListener('popstate',()=>{const id=new URL(location.href).searchParams.get('c');select(validId(id)?id:'');});
 renderHeader();suggestions();updateComposer();
 refresh(true).then(restoreDraft);setInterval(()=>refresh(),4000);

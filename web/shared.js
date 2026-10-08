@@ -19,7 +19,7 @@ export function normalizeBaseUrl(value = DEFAULT_URL) {
 export class ApiError extends Error {
   constructor(message, status = 0) { super(message); this.status = status; }
 }
-export async function apiRequest(settings, path, {method = 'GET', body, signal, timeout = 7000, credentials = 'omit'} = {}) {
+export async function apiRequest(settings, path, {method = 'GET', body, signal, timeout = 7000, credentials} = {}) {
   const base = normalizeBaseUrl(settings.backendUrl || DEFAULT_URL);
   const controller = new AbortController();
   const abort = () => controller.abort(signal?.reason);
@@ -29,7 +29,7 @@ export async function apiRequest(settings, path, {method = 'GET', body, signal, 
     const headers = {Accept: 'application/json'};
     if (settings.token) headers.Authorization = `Bearer ${settings.token}`;
     if (body !== undefined) headers['Content-Type'] = 'application/json';
-    const response = await fetch(base + path, {method, headers, body: body === undefined ? undefined : JSON.stringify(body), cache: 'no-store', signal: controller.signal, credentials, redirect: 'error'});
+    const response = await fetch(base + path, {method, headers, body: body === undefined ? undefined : JSON.stringify(body), cache: 'no-store', signal: controller.signal, credentials:credentials||(settings.token?'omit':'same-origin'), redirect: 'error'});
     let data;
     try { data = await response.json(); } catch { throw new ApiError('后端返回了无法识别的数据，请确认端口属于本项目 v1 后端', response.status); }
     if (!response.ok) throw new ApiError(data.error || `后端 HTTP ${response.status}`, response.status);

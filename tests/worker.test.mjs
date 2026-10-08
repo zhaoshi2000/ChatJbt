@@ -35,6 +35,7 @@ function harness({saved={},session={doubaoSession:'browser-session'},server={}}=
    const parsed=new URL(url),path=parsed.pathname;if(parsed.hostname==='chatgpt.com'&&path==='/backend-api/estuary/content')return new Response(new Uint8Array([80,75,3,4]),{status:200,headers:{'Content-Type':'application/zip'}});
    const body=typeof options.body==='string'?JSON.parse(options.body):{};counters.requests.push({path,body});let value={ok:true},status=200;
    if(path==='/api/me')value={version:VERSION,role:server.role||'account',account:{id:server.accountId||ACCOUNT,name:'账号 A',clientId:CLIENT},maxConcurrent:3};
+   else if(path==='/api/web-session')value={ok:true,code:'grant-aaaaaaaa',expiresIn:30};
    else if(path==='/health')value={version:VERSION};
    else if(path==='/api/tasks')value={tasks:clone([...tasks].reverse())};
    else if(path.startsWith('/api/tasks/'))value=clone(tasks.find(t=>t.id===path.split('/').at(-1)));
@@ -151,6 +152,10 @@ test('cancelled task discards pending outbox and releases only its own work page
 test('web operations require local origin, top frame, correct account and non-incognito profile',async()=>{
  const h=harness();for(const url of ['https://example.org/web/','http://127.0.0.1:49999/web/','http://127.0.0.1:48643/not-web'])assert.equal((await h.web('ui-status',{},url)).ok,false);
  assert.equal((await h.web('ui-status',{},undefined,1)).ok,false);assert.equal((await h.web('ui-prepare-bridge',{accountId:'other-account00',conversationId:C1})).ok,false);
+});
+test('paired extension grants a one-time web session without exposing its account token',async()=>{
+ const h=harness();const result=await h.web('ui-web-session');assert.equal(result.ok,true);assert.equal(result.code,'grant-aaaaaaaa');
+ const request=h.counters.requests.find(item=>item.path==='/api/web-session');assert.deepEqual(request.body,{clientId:CLIENT});assert.equal('token' in result,false);
 });
 test('master token cannot pair as a web bridge',async()=>{
  const h=harness({server:{role:'admin'}});assert.equal((await h.internal('ui-save-settings',{settings:{token:TOKEN,confirmProfile:true}})).ok,false);

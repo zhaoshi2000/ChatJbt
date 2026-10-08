@@ -4,9 +4,10 @@ const $=id=>document.getElementById(id),BACKEND={backendUrl:location.origin},CON
 const adminRequest=(path,options={})=>apiRequest(BACKEND,path,{...options,credentials:'same-origin'});
 function result(text,error=false){$('result').textContent=text;$('result').classList.toggle('error',error);}
 async function bindCurrent(response){
-  const settings={backendUrl:location.origin,token:response.token,enabled:true};
   await webWorker('web-pair',{token:response.token,enabled:true,confirmProfile:true,profileLabel:response.account.name});
-  localStorage.setItem(CONNECTION_KEY,JSON.stringify({...settings,accountId:response.account.id}));
+  const grant=await webWorker('ui-web-session');
+  await apiRequest(BACKEND,'/api/web-session/exchange',{method:'POST',body:{code:grant.code},credentials:'same-origin'});
+  localStorage.setItem(CONNECTION_KEY,JSON.stringify({backendUrl:location.origin,enabled:true,accountId:response.account.id}));
   result(response.account.name+' 已自动绑定到当前浏览器；没有需要复制的令牌。');
 }
 async function loadAccounts(){

@@ -33,6 +33,10 @@ test('download command forwards only scoped task and file identifiers',async()=>
   const h=harness();await h.send({channel:'doubao.web.request',id:'request-download',operation:'ui-download-file',accountId:'account-aaaaaaaa',conversationId:'conversation-1111',taskId:'task-00000001',fileName:'forum.zip',url:'https://attacker.test'});
   assert.equal(h.sent.length,1);assert.equal(h.sent[0].taskId,'task-00000001');assert.equal(h.sent[0].fileName,'forum.zip');assert.equal(h.sent[0].url,undefined);
 });
+test('automatic web session request forwards no token from the desktop page',async()=>{
+  const h=harness();await h.send({channel:'doubao.web.request',id:'session-request',operation:'ui-web-session',token:'should-not-be-needed'});
+  assert.equal(h.sent.length,1);assert.equal(h.sent[0].operation,'ui-web-session');assert.equal(h.sent[0].token,'');
+});
 test('content connector refuses generic extension commands',async()=>{
   const h=harness();await h.send({channel:'doubao.web.request',id:'request-1',operation:'ui-save-settings'});
   assert.equal(h.sent.length,0);assert.equal(h.responses[0].m.result.ok,false);

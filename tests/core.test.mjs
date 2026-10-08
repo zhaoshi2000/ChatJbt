@@ -21,6 +21,11 @@ test('generated file control downloads through authenticated local storage witho
   assert.doesNotMatch(app,/window\.open\([^\n]*\/files\//);
   assert.match(app,/webWorker\('ui-download-file'/);
 });
+test('desktop client uses automatic HttpOnly account sessions and exposes no token controls',()=>{
+  const app=fs.readFileSync(new URL('../web/app.js',import.meta.url),'utf8'),html=fs.readFileSync(new URL('../web/app.html',import.meta.url),'utf8');
+  assert.match(app,/ui-web-session/);assert.match(app,/web-session\/exchange/);assert.match(app,/credentials:'same-origin'/);
+  assert.doesNotMatch(html,/id="token"|copyCurrentToken|生成并复制令牌|账号专属令牌/);assert.match(html,/客户端自动连接，不需要令牌/);
+});
 
 test('normalizes IPv4 loopback and localhost without IPv6 ambiguity',()=>{
   assert.equal(normalizeBaseUrl(' http://localhost:48627/ '),'http://127.0.0.1:48627');

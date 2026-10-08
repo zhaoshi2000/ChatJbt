@@ -4,7 +4,7 @@
   if (window !== window.top || window.__doubaoLocalLink) return;
   if (!['/web/', '/web/app.html', '/web/admin.html', '/', '/app.html'].includes(location.pathname)) return;
   window.__doubaoLocalLink = true;
-  const allowed = new Set(['ui-status','web-pair','ui-open-bridge','ui-prepare-bridge','ui-repair','ui-unbind','ui-wake','ui-download-file','ui-show-work-window','ui-hide-work-window']);
+  const allowed = new Set(['ui-status','web-pair','ui-web-session','ui-set-enabled','ui-open-bridge','ui-prepare-bridge','ui-repair','ui-unbind','ui-wake','ui-download-file','ui-show-work-window','ui-hide-work-window']);
   const inflight = new Set();
   window.addEventListener('message', async event => {
     if (event.source !== window || event.origin !== location.origin) return;
@@ -16,7 +16,7 @@
     try {
       if (!allowed.has(m.operation)) throw new Error('网页无权执行此扩展操作');
       result = await chrome.runtime.sendMessage({type:'doubao-web', operation:m.operation,
-        token:typeof m.token==='string'?m.token.slice(0,100):'', enabled:m.enabled!==false,
+        token:m.operation==='web-pair'&&typeof m.token==='string'?m.token.slice(0,100):'', enabled:m.enabled!==false,
         accountId:typeof m.accountId==='string'?m.accountId.slice(0,100):'',
         conversationId:typeof m.conversationId==='string'?m.conversationId.slice(0,100):'',
         taskId:typeof m.taskId==='string'?m.taskId.slice(0,100):'', fileName:typeof m.fileName==='string'?m.fileName.slice(0,160):'',

@@ -330,6 +330,15 @@ async function uiOperation(message,sender,isInternal=false){
   if(op==='web-pair'||op==='ui-save-settings')return pair(isInternal?message.settings||{}:message);
   if(op==='ui-open-workspace'){await openWorkspace();return {ok:true};}
   const config=await settings();
+  if(op==='ui-web-session'){
+    if(!config.accountId||!config.token)throw new Error('当前浏览器尚未绑定账号，请先在后台控制台绑定');
+    const grant=await request('/api/web-session',{method:'POST',body:{clientId:await get('clientId')}});
+    return {ok:true,code:grant.code,accountId:config.accountId,accountName:config.accountName};
+  }
+  if(op==='ui-set-enabled'){
+    if(!config.accountId)throw new Error('当前浏览器尚未绑定账号');
+    await write({settings:{...config,enabled:message.enabled!==false}});kick();return {ok:true,enabled:message.enabled!==false};
+  }
   if(!isInternal&&message.accountId!==config.accountId)throw new Error('本网页账号与扩展配置文件不一致；请到对应账号的浏览器窗口操作');
   if(op==='ui-wake'){kick();return {ok:true};}
   if(op==='ui-show-work-window'||op==='ui-hide-work-window'){

@@ -19,6 +19,7 @@ public final class BackendServer {
     final ScheduledExecutorService maintenance=Executors.newSingleThreadScheduledExecutor(Thread.ofPlatform().daemon().factory());
     final Map<String,Map<String,Object>> bridges=new ConcurrentHashMap<>();
     final Map<String,Long> adminSessions=new ConcurrentHashMap<>();
+    final Map<String,Map<String,Object>> accountSessions=new ConcurrentHashMap<>(),webSessionGrants=new ConcurrentHashMap<>();
     final Semaphore streams=new Semaphore(64), polls=new Semaphore(64), requests=new Semaphore(256);
     volatile boolean stopping;
     BackendServer()throws Exception{
@@ -45,7 +46,7 @@ public final class BackendServer {
     }
     void start(){
         server.start();
-        maintenance.scheduleWithFixedDelay(()->{try{long now=System.currentTimeMillis();store.sweep();bridges.entrySet().removeIf(e->now-Json.num(e.getValue(),"lastSeen",0)>180_000);adminSessions.entrySet().removeIf(e->e.getValue()<now);}catch(Exception e){System.err.println("[ERROR] Maintenance failed: "+e.getClass().getSimpleName());}},1,1,TimeUnit.SECONDS);
+        maintenance.scheduleWithFixedDelay(()->{try{long now=System.currentTimeMillis();store.sweep();bridges.entrySet().removeIf(e->now-Json.num(e.getValue(),"lastSeen",0)>180_000);adminSessions.entrySet().removeIf(e->e.getValue()<now);accountSessions.entrySet().removeIf(e->Json.num(e.getValue(),"expires",0)<now);webSessionGrants.entrySet().removeIf(e->Json.num(e.getValue(),"expires",0)<now);}catch(Exception e){System.err.println("[ERROR] Maintenance failed: "+e.getClass().getSimpleName());}},1,1,TimeUnit.SECONDS);
         for(var t:store.all())if(t.state.equals("queued"))upstream.submit(t);
         System.out.println("GBT "+VERSION+"  |  Java "+Runtime.version().feature());
         System.out.println("Listening: http://127.0.0.1:"+config.port+"  |  provider="+config.provider);
@@ -86,6 +87,15 @@ public final class BackendServer {
                     send(x,201,workspaces.createAccount(name));
                 }return;
             }
+            if(path.equals("/api/web-session/exchange")){
+                require(method,"POST");var m=body(x);String code=Json.str(m,"code","");Map<String,Object> grant=webSessionGrants.remove(code);
+                if(grant==null||Json.num(grant,"expires",0)<System.currentTimeMillis())throw new WorkspaceStore.Forbidden("自动连接凭证已过期，请重新连接");
+                String id=randomId(),grantedAccount=Json.str(grant,"accountId","");
+                if(!workspaces.accounts.containsKey(grantedAccount))throw new WorkspaceStore.Forbidden("账号已失效，请在后台控制台重新绑定");
+                accountSessions.put(id,Json.map("accountId",grantedAccount,"clientId",Json.str(grant,"clientId",""),"expires",System.currentTimeMillis()+28_800_000L));
+                x.getResponseHeaders().add("Set-Cookie","GBT_ACCOUNT_SESSION="+id+"; HttpOnly; SameSite=Strict; Path=/api; Max-Age=28800");
+                send(x,200,Json.map("ok",true,"account",workspaces.accountView(grantedAccount)));return;
+            }
             if(path.startsWith("/api/admin-console/")){
                 if(!validAdminSession(x)){send(x,401,Json.map("error","本机管理会话已过期，请刷新后台控制台"));return;}
                 var admin=new WorkspaceStore.Principal(true,"");
@@ -100,11 +110,17 @@ public final class BackendServer {
                 send(x,404,Json.map("error","Not found"));return;
             }
             var principal=workspaces.authenticate(x.getRequestHeaders().getFirst("Authorization"),token);
-            if(principal==null){send(x,401,Json.map("error","令牌无效。首次使用请用 data/local-token.txt 创建账号；已有账号请用该账号专属令牌。"));return;}
+            if(principal==null&&path.startsWith("/api/"))principal=accountSessionPrincipal(x);
+            if(principal==null){send(x,401,Json.map("error",path.startsWith("/api/")?"账号会话已过期，请重新打开或刷新 GBT 客户端":"令牌无效"));return;}
             String accountId=principal.admin()?null:principal.accountId();
             if(path.startsWith("/v1/")){OpenAiCompat.handle(this,x,method,path,principal);return;}
             if(path.equals("/api/me")){
                 require(method,"GET");send(x,200,Json.map("role",principal.admin()?"admin":"account","account",principal.admin()?null:workspaces.accountView(accountId),"version",VERSION,"provider",config.provider,"maxConcurrent",config.concurrent));return;
+            }
+            if(path.equals("/api/web-session")){
+                require(method,"POST");WorkspaceStore.requireAccount(principal);var m=body(x);String client=clientId(m);workspaces.checkClient(accountId,client);
+                String code=randomId();webSessionGrants.put(code,Json.map("accountId",accountId,"clientId",client,"expires",System.currentTimeMillis()+30_000L));
+                send(x,201,Json.map("ok",true,"code",code,"expiresIn",30));return;
             }
             if(path.equals("/api/accounts")){
                 if(method.equals("GET")){send(x,200,Json.map("accounts",workspaces.accountList(principal)));return;}
@@ -253,6 +269,17 @@ public final class BackendServer {
         for(String item:cookie.split(";")){String[] pair=item.trim().split("=",2);if(pair.length==2&&pair[0].equals("GBT_ADMIN_SESSION")){Long expires=adminSessions.get(pair[1]);return expires!=null&&expires>=System.currentTimeMillis();}}
         return false;
     }
+    WorkspaceStore.Principal accountSessionPrincipal(HttpExchange x){
+        String id=cookie(x,"GBT_ACCOUNT_SESSION");if(id.isEmpty())return null;Map<String,Object> session=accountSessions.get(id);
+        if(session==null||Json.num(session,"expires",0)<System.currentTimeMillis()){accountSessions.remove(id);return null;}
+        String accountId=Json.str(session,"accountId","");if(!workspaces.accounts.containsKey(accountId))return null;
+        String bound=Json.str(workspaces.accountView(accountId),"clientId","");return !bound.isEmpty()&&bound.equals(Json.str(session,"clientId",""))?new WorkspaceStore.Principal(false,accountId):null;
+    }
+    static String cookie(HttpExchange x,String name){
+        String value=x.getRequestHeaders().getFirst("Cookie");if(value==null)return "";
+        for(String item:value.split(";")){String[] pair=item.trim().split("=",2);if(pair.length==2&&pair[0].equals(name))return pair[1];}return "";
+    }
+    static String randomId(){byte[] random=new byte[32];new SecureRandom().nextBytes(random);return Base64.getUrlEncoder().withoutPadding().encodeToString(random);}
     void issueAdminSession(HttpExchange x){
         byte[] random=new byte[32];new SecureRandom().nextBytes(random);String id=Base64.getUrlEncoder().withoutPadding().encodeToString(random);adminSessions.put(id,System.currentTimeMillis()+28_800_000L);
         x.getResponseHeaders().add("Set-Cookie","GBT_ADMIN_SESSION="+id+"; HttpOnly; SameSite=Strict; Path=/api/admin-console; Max-Age=28800");

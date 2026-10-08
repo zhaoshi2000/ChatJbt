@@ -29,7 +29,9 @@ class Backend:
         except:value=raw.decode(errors='replace')
         return code,value
     def raw(self,method,path,data=b'',token=None,headers=None):
-        c=http.client.HTTPConnection('127.0.0.1',self.port,timeout=8);h={'Authorization':'Bearer '+(token or self.token),**(headers or {})};c.request(method,path,body=data,headers=h);r=c.getresponse();raw=r.read();result=(r.status,raw,dict(r.getheaders()));c.close();return result
+        c=http.client.HTTPConnection('127.0.0.1',self.port,timeout=8);h=dict(headers or {})
+        if token is not False:h['Authorization']='Bearer '+(token or self.token)
+        c.request(method,path,body=data,headers=h);r=c.getresponse();raw=r.read();result=(r.status,raw,dict(r.getheaders()));c.close();return result
     def close(self):
         if self.proc and self.proc.poll() is None:
             self.proc.terminate()
@@ -55,6 +57,17 @@ class BootstrapTests(unittest.TestCase):
             self.assertEqual(code,201);self.assertGreaterEqual(len(r['token']),40)
             me=b.call('GET','/api/me',token=r['token'])[1];self.assertEqual(me['role'],'account');self.assertEqual(me['account']['name'],'我的账号')
             self.assertEqual(b.call('POST','/api/bootstrap-account',{'name':'第二个账号'},token=False,headers=origin)[0],409)
+        finally:b.cleanup()
+class WebSessionTests(unittest.TestCase):
+    def test_client_uses_http_only_session_instead_of_account_token(self):
+        b=Backend()
+        try:
+            a=b.account('自动连接');b.register(a);code,grant=b.call('POST','/api/web-session',{'clientId':a['clientId']},a['token']);self.assertEqual(code,201);self.assertNotIn('token',grant)
+            payload=json.dumps({'code':grant['code']}).encode();code,raw,headers=b.raw('POST','/api/web-session/exchange',payload,False,{'Content-Type':'application/json'});self.assertEqual(code,200,raw)
+            cookie=headers['Set-cookie'].split(';',1)[0];self.assertIn('HttpOnly',headers['Set-cookie']);self.assertNotIn(a['token'],headers['Set-cookie'])
+            code,me=b.call('GET','/api/me',token=False,headers={'Cookie':cookie});self.assertEqual(code,200);self.assertEqual(me['account']['id'],a['id'])
+            self.assertEqual(b.call('GET','/api/tasks',token=False,headers={'Cookie':cookie})[0],200)
+            self.assertEqual(b.call('GET','/v1/models',token=False,headers={'Cookie':cookie})[0],401)
         finally:b.cleanup()
 class IsolationTests(unittest.TestCase):
     @classmethod
