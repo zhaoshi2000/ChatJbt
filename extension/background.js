@@ -1,7 +1,7 @@
 import {DEFAULT_URL,VERSION,TERMINAL,normalizeBaseUrl,apiRequest} from './shared.js';
 import {chatUrl,conversationUrl,stableConversationUrl,pageAtTarget,validId,assertTask,assertPacket,planTaskIds} from './lane-core.js';
 const storage=chrome.storage.local, PREFIX='lane:', ACCOUNT_TAB='accountWorkTab', ALARM='doubao-multi-recover';
-const CONTENT_REVISION='2026-09-22.31';
+const CONTENT_REVISION='2026-10-08.32';
 const get=async key=>(await storage.get(key))[key];
 const write=value=>storage.set(value);
 const locks=new Map();
@@ -71,6 +71,29 @@ async function uploadGeneratedFile(task,source,tabId,pageUrl){
 function kick(delay=0){if(cyclePromise){if(delay===0)rerun=true;return;}clearTimeout(timer);timer=setTimeout(()=>runCycle().catch(()=>{}),delay);}
 const pause=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 async function ping(tabId){let timeout;try{return await Promise.race([chrome.tabs.sendMessage(tabId,{type:'jsc-ping'}),new Promise((_,reject)=>{timeout=setTimeout(()=>reject(new Error('页面响应超时')),3000);})]);}catch{return null;}finally{clearTimeout(timeout);}}
+async function revealWorkTab(tab){
+  if(!tab)return;
+  await chrome.tabs.update(tab.id,{active:true}).catch(()=>{});
+  await chrome.windows.update(tab.windowId,{state:'normal',focused:true}).catch(()=>{});
+  const shared=await get(ACCOUNT_TAB);if(shared?.tabId===tab.id)await write({[ACCOUNT_TAB]:{...shared,windowId:tab.windowId,hidden:false}});
+}
+async function keepWorkWindowHidden(tab,shared){
+  if(tab&&shared?.windowId===tab.windowId){await chrome.windows.update(tab.windowId,{state:'minimized',focused:false}).catch(()=>{});await write({[ACCOUNT_TAB]:{...shared,windowId:tab.windowId,hidden:true}});}
+}
+async function dedicatedWorkWindow(tab,shared){
+  if(tab&&shared?.windowId===tab.windowId){if(shared.hidden!==false)await keepWorkWindowHidden(tab,shared);return {tab,shared:{...shared,hidden:shared.hidden!==false}};}
+  if(tab){
+    const created=await chrome.windows.create({tabId:tab.id,type:'normal',state:'minimized',focused:false});
+    await chrome.windows.update(created.id,{state:'minimized',focused:false}).catch(()=>{});
+    tab=await chrome.tabs.get(tab.id);shared={...shared,tabId:tab.id,windowId:created.id,hidden:true};
+    return {tab,shared};
+  }
+  const created=await chrome.windows.create({url:'https://chatgpt.com/',type:'normal',state:'minimized',focused:false});
+  await chrome.windows.update(created.id,{state:'minimized',focused:false}).catch(()=>{});
+  tab=created.tabs?.[0]||await chrome.tabs.query({windowId:created.id}).then(items=>items[0]);
+  if(!tab)throw new Error('无法创建账号专用 ChatGPT 工作窗口');
+  return {tab,shared:{...shared,tabId:tab.id,windowId:created.id,hidden:true}};
+}
 async function ensureContent(tabId,waitMs=60_000,targetUrl=''){
   const deadline=Date.now()+waitMs;let tab,lastInfo,reloaded=false,injectionFailures=0;
   while(Date.now()<deadline){
@@ -91,17 +114,22 @@ async function ensureContent(tabId,waitMs=60_000,targetUrl=''){
     }else if(tab.status==='complete'&&url&&!/^(edge|chrome):\/\/newtab/.test(url))throw new Error('工作标签页没有进入 ChatGPT，请检查登录或站点权限');
     await pause(250);
   }
-  if(tab){await chrome.tabs.update(tabId,{active:true}).catch(()=>{});await chrome.windows.update(tab.windowId,{focused:true}).catch(()=>{});}
+  if(tab)await revealWorkTab(tab);
   throw new Error(lastInfo?.detail||'已自动打开工作页，但 ChatGPT 输入框长时间未就绪；请在弹出的页面完成登录后重试');
 }
-async function accountWorkTab(config,lane){
+async function accountWorkTab(config,lane={bridge:null}){
   let shared=await get(ACCOUNT_TAB),tab;
   if(shared?.accountId===config.accountId&&shared.tabId)try{tab=await chrome.tabs.get(shared.tabId);}catch{}
-  if(tab&&chatUrl(tab.url||tab.pendingUrl))return {shared,tab};
+  if(!tab&&shared?.accountId===config.accountId){
+    const windows=await chrome.windows.getAll({populate:true}).catch(()=>[]),candidate=windows.find(win=>win.state==='minimized'&&win.tabs?.length===1&&chatUrl(win.tabs[0].url||win.tabs[0].pendingUrl));
+    if(candidate){tab=candidate.tabs[0];shared={...shared,tabId:tab.id,windowId:candidate.id};}
+  }
+  if(tab&&chatUrl(tab.url||tab.pendingUrl)){({tab,shared}=await dedicatedWorkWindow(tab,shared));await write({[ACCOUNT_TAB]:shared});return {shared,tab};}
   const lanes=(await allLanes()).filter(item=>item.accountId===config.accountId),active=lanes.find(item=>item.active&&item.bridge?.tabId),fallback=lane.bridge?.tabId?lane:lanes.find(item=>item.bridge?.tabId),source=active||fallback;
   if(source)try{tab=await chrome.tabs.get(source.bridge.tabId);}catch{}
   if(tab&&chatUrl(tab.url||tab.pendingUrl))shared={accountId:config.accountId,tabId:tab.id,currentConversationId:source.conversationId};
-  else{tab=await chrome.tabs.create({url:'https://chatgpt.com/',active:false});shared={accountId:config.accountId,tabId:tab.id,currentConversationId:''};}
+  else{tab=null;shared={accountId:config.accountId,currentConversationId:''};}
+  ({tab,shared}=await dedicatedWorkWindow(tab,shared));
   // v1.2 originally created one tab per conversation. On the first run of the
   // shared-tab design, close only inactive tabs that the extension itself had
   // recorded, leaving manual ChatGPT tabs and any legacy active task untouched.
@@ -131,9 +159,10 @@ async function ensureLaneUnlocked(config,conversationId,{focus=false}={}) {
   const switching=shared.currentConversationId!==conversationId;
   if(switching){tab=await chrome.tabs.update(tab.id,{url:expected||'https://chatgpt.com/'});shared={...shared,currentConversationId:conversationId,documentKey:null};await write({[ACCOUNT_TAB]:shared});}
   if(tab?.discarded)await chrome.tabs.reload(tab.id).catch(()=>{});
-  if(focus){await chrome.tabs.update(tab.id,{active:true});await chrome.windows.update(tab.windowId,{focused:true}).catch(()=>{});}
+  if(focus)await revealWorkTab(tab);
   const targetUrl=switching?(expected||'https://chatgpt.com/'):'';
   const bound=await ensureContent(tab.id,60_000,targetUrl), actual=conversationUrl(bound.info.href||bound.tab.url);
+  if(!focus)await keepWorkWindowHidden(tab,shared);
   if(expected&&actual!==expected)throw new Error('工作网页地址与本地会话不一致，已阻止串聊。请恢复原对话地址：'+expected);
   if(!expected&&!switching&&!lane.active?.task.submitted&&(actual||bound.info.userCount>0))throw new Error('新建会话的工作页已有其他聊天内容。请点击“新对话”后重试，不会接管已有对话。');
   if(lane.active?.task.submitted&&lane.bridge.documentKey&&lane.bridge.documentKey!==bound.info.documentKey&&!expected&&!actual)
@@ -188,6 +217,7 @@ async function wakeHiddenWorkTab(packet,sender){
   await pause(2000);
   const current=await chrome.tabs.get(tabId).catch(()=>null),previous=await chrome.tabs.get(visible.id).catch(()=>null);
   if(current&&previous&&current.windowId===previous.windowId)await chrome.tabs.update(previous.id,{active:true}).catch(()=>{});
+  const shared=await get(ACCOUNT_TAB);await keepWorkWindowHidden(current,shared);
   return {ok:true,woken:true};
 }
 async function release(lane,state){
@@ -250,6 +280,7 @@ async function runCycle(){
       const me=await request('/api/me');
       if(me.version!==VERSION||me.role!=='account'||me.account.id!==config.accountId)throw new Error('账号或版本不匹配，请同时更新后端和扩展并重新配对');
       if(me.account.clientId!==await get('clientId'))throw new Error('此配置文件的账号绑定已失效，请到网页连接设置重新配对');
+      await accountWorkTab(config);
       const {tasks}=await request('/api/tasks');const lanes=(await allLanes()).filter(l=>l.accountId===config.accountId);
       const active=lanes.filter(l=>l.active).map(l=>l.conversationId);
       // One signed-in account owns exactly one ChatGPT work tab. Tasks from
@@ -258,7 +289,7 @@ async function runCycle(){
       const abandonedDrafts=tasks.filter(t=>TERMINAL.has(t.state)&&!t.submitted).slice(0,12);
       await Promise.all(ids.map(id=>workLane(id,tasks.find(t=>t.conversationId===id&&!TERMINAL.has(t.state)),config.enabled,abandonedDrafts)));
       const updated=(await allLanes()).filter(l=>l.accountId===config.accountId),count=updated.filter(l=>l.active).length,waiting=tasks.some(t=>!TERMINAL.has(t.state)),blocked=updated.find(l=>ids.includes(l.conversationId)&&!l.active&&l.ready===false&&l.detail);
-      const ready=config.enabled&&!blocked,detail=!config.enabled?'已暂停领取新任务':blocked?.detail||'账号桥接在线；同一账号复用一个工作标签页';
+      const ready=config.enabled&&!blocked,detail=!config.enabled?'已暂停领取新任务':blocked?.detail||'账号桥接在线；专用工作窗口已在后台最小化运行';
       await request('/api/bridge/heartbeat',{method:'POST',body:{clientId:await get('clientId'),ready,activeCount:count,detail}});
       await setStatus({backend:'online',ready,activeCount:count,accountId:config.accountId,detail});failures=0;
       if(!count&&!tasks.some(t=>!TERMINAL.has(t.state)))delay=12000;
@@ -301,6 +332,12 @@ async function uiOperation(message,sender,isInternal=false){
   const config=await settings();
   if(!isInternal&&message.accountId!==config.accountId)throw new Error('本网页账号与扩展配置文件不一致；请到对应账号的浏览器窗口操作');
   if(op==='ui-wake'){kick();return {ok:true};}
+  if(op==='ui-show-work-window'||op==='ui-hide-work-window'){
+    await request('/api/me');
+    const {shared,tab}=await accountWorkTab(config);
+    if(op==='ui-show-work-window')await revealWorkTab(tab);else await keepWorkWindowHidden(tab,shared);
+    return {ok:true,tabId:tab.id,windowId:tab.windowId,visible:op==='ui-show-work-window'};
+  }
   if(op==='ui-download-file'){
     if(!validId(message.conversationId)||!validId(message.taskId)||typeof message.fileName!=='string'||!message.fileName.trim()||message.fileName.length>160)throw new Error('无效下载请求');
     const other=(await allLanes()).find(l=>l.accountId===config.accountId&&l.active&&l.conversationId!==message.conversationId);if(other)throw new Error('工作页正在处理另一条消息，请完成后再下载');
@@ -313,12 +350,12 @@ async function uiOperation(message,sender,isInternal=false){
     await request('/api/me');
     const other=(await allLanes()).find(l=>l.accountId===config.accountId&&l.active&&l.conversationId!==message.conversationId);
     if(other){
-      if(other.bridge?.tabId){await chrome.tabs.update(other.bridge.tabId,{active:true}).catch(()=>{});const tab=await chrome.tabs.get(other.bridge.tabId).catch(()=>null);if(tab)await chrome.windows.update(tab.windowId,{focused:true}).catch(()=>{});}
+      if(op!=='ui-prepare-bridge'&&other.bridge?.tabId){const tab=await chrome.tabs.get(other.bridge.tabId).catch(()=>null);if(tab)await revealWorkTab(tab);}
       return {ok:true,ready:false,tabId:other.bridge?.tabId,detail:'此账号的唯一工作页正在处理另一会话；当前任务会自动排队'};
     }
     const taskList=await request('/api/tasks'),queuedOther=taskList.tasks.find(t=>!TERMINAL.has(t.state)&&t.conversationId!==message.conversationId);
     if(queuedOther){
-      const shared=await get(ACCOUNT_TAB);if(shared?.tabId){await chrome.tabs.update(shared.tabId,{active:true}).catch(()=>{});const tab=await chrome.tabs.get(shared.tabId).catch(()=>null);if(tab)await chrome.windows.update(tab.windowId,{focused:true}).catch(()=>{});}
+      const shared=await get(ACCOUNT_TAB);if(op!=='ui-prepare-bridge'&&shared?.tabId){const tab=await chrome.tabs.get(shared.tabId).catch(()=>null);if(tab)await revealWorkTab(tab);}
       return {ok:true,ready:false,tabId:shared?.tabId,detail:'此账号已有其他会话排队或处理中；不会切走唯一工作页'};
     }
     const result=await ordered(message.conversationId,()=>ensureLane(message.conversationId,{focus:op!=='ui-prepare-bridge'}));

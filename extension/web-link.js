@@ -4,7 +4,7 @@
   if (window !== window.top || window.__doubaoLocalLink) return;
   if (!['/web/', '/web/app.html', '/', '/app.html'].includes(location.pathname)) return;
   window.__doubaoLocalLink = true;
-  const allowed = new Set(['ui-status','web-pair','ui-open-bridge','ui-prepare-bridge','ui-repair','ui-unbind','ui-wake','ui-download-file']);
+  const allowed = new Set(['ui-status','web-pair','ui-open-bridge','ui-prepare-bridge','ui-repair','ui-unbind','ui-wake','ui-download-file','ui-show-work-window','ui-hide-work-window']);
   const inflight = new Set();
   window.addEventListener('message', async event => {
     if (event.source !== window || event.origin !== location.origin) return;

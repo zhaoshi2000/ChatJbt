@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
 import {webcrypto} from 'node:crypto';
-const ID='a'.repeat(32),ORIGIN=`chrome-extension://${ID}/`,TOKEN='b'.repeat(43),VERSION='1.2.1',CONTENT_REVISION='2026-09-22.31';
+const ID='a'.repeat(32),ORIGIN=`chrome-extension://${ID}/`,TOKEN='b'.repeat(43),VERSION='1.2.1',CONTENT_REVISION='2026-10-08.32';
 const ACCOUNT='account-aaaaaaaa',CLIENT='client-aaaaaaaa',C1='conversation-1111',C2='conversation-2222';
 const source=['extension/shared.js','extension/lane-core.js','extension/background.js'].map(p=>fs.readFileSync(new URL('../'+p,import.meta.url),'utf8').replace(/^import .*\n/gm,'').replaceAll('export ','')).join('\n');
 const clone=x=>x===undefined?undefined:structuredClone(x);
@@ -14,11 +14,16 @@ function harness({saved={},session={doubaoSession:'browser-session'},server={}}=
  saved.clientId??=CLIENT;
  const tasks=server.tasks??=[C1,C2].map((c,i)=>({id:`task-0000000${i}`,accountId:ACCOUNT,conversationId:c,message:'测试 '+i,state:'queued',provider:'browser',created:Date.now()+i,text:'',lastSeq:0,submitted:false,lease:'lease-'+i,deadline:Date.now()+120000,checkpoint:{}}));
  const conversations=server.conversations??=Object.fromEntries([C1,C2].map(id=>[id,{id,accountId:ACCOUNT,title:id,upstreamUrl:''}]));
- const counters={creates:[],runs:[],requests:[],events:[],uploads:[],downloads:[],resolves:[],discards:[],reloads:[],injections:[],wakeMessages:[],alarms:0,scheduled:[]};
+ const counters={creates:[],windowCreates:[],windowUpdates:[],runs:[],requests:[],events:[],uploads:[],downloads:[],resolves:[],discards:[],reloads:[],injections:[],wakeMessages:[],alarms:0,scheduled:[]};
  const tabs=new Map([[10,{id:10,url:'https://chatgpt.com/c/manual',windowId:1,autoDiscardable:true,active:true}]]),pages=new Map();
+ const windows=new Map([[1,{id:1,state:'normal',focused:true,type:'normal'}]]);let nextWindowId=2;
  const messages=event(),removed=event();
  const makeStorage=obj=>({get:async keys=>keys===null?clone(obj):Object.fromEntries((Array.isArray(keys)?keys:[keys]).map(k=>[k,clone(obj[k])])),set:async patch=>Object.assign(obj,clone(patch)),remove:async key=>{for(const k of Array.isArray(key)?key:[key])delete obj[k];},setAccessLevel:async()=>{}});
- const chrome={storage:{local:makeStorage(saved),session:makeStorage(session)},runtime:{id:ID,getURL:p=>ORIGIN+p,onMessage:messages,onStartup:event(),onInstalled:event()},alarms:{get:async()=>null,create:async()=>{counters.alarms++;},onAlarm:event()},action:{onClicked:event(),setBadgeText:async()=>{}},windows:{update:async()=>{}},scripting:{executeScript:async spec=>{if(spec.world==='MAIN'){counters.resolves.push({tabId:spec.target.tabId,args:clone(spec.args)});return [{result:{ok:true,status:200,downloadUrl:'https://chatgpt.com/backend-api/estuary/content?id=resolved',fileName:'resolved.txt',mimeType:'text/plain'}}];}counters.injections.push(spec.target.tabId);const page=pages.get(spec.target.tabId);if(page){page.version=VERSION;page.revision=CONTENT_REVISION;}}},tabs:{onUpdated:event(),onRemoved:removed,
+ const chrome={storage:{local:makeStorage(saved),session:makeStorage(session)},runtime:{id:ID,getURL:p=>ORIGIN+p,onMessage:messages,onStartup:event(),onInstalled:event()},alarms:{get:async()=>null,create:async()=>{counters.alarms++;},onAlarm:event()},action:{onClicked:event(),setBadgeText:async()=>{}},windows:{
+  getAll:async({populate}={})=>Array.from(windows.values()).map(win=>({...clone(win),tabs:populate?Array.from(tabs.values()).filter(tab=>tab.windowId===win.id).map(clone):undefined})),
+  create:async options=>{const id=nextWindowId++,win={id,state:options.state||'normal',focused:options.focused!==false,type:options.type||'normal'};windows.set(id,win);let tab;if(options.tabId){tab=tabs.get(options.tabId);tab.windowId=id;tab.active=true;}else{const tabId=Math.max(...tabs.keys())+1;tab={id:tabId,url:options.url,active:true,windowId:id,autoDiscardable:true};tabs.set(tabId,tab);pages.set(tabId,{ok:true,version:VERSION,revision:CONTENT_REVISION,composer:true,busy:false,hasDraft:false,activeTask:null,documentKey:'doc-'+tabId,href:options.url,userCount:0,detail:'fixture ready'});counters.creates.push(tabId);}counters.windowCreates.push(clone({id,...options}));return {...clone(win),tabs:[clone(tab)]};},
+  update:async(id,patch)=>{if(!windows.has(id))throw Error('missing window');Object.assign(windows.get(id),patch);counters.windowUpdates.push([id,clone(patch)]);return clone(windows.get(id));}
+ },scripting:{executeScript:async spec=>{if(spec.world==='MAIN'){counters.resolves.push({tabId:spec.target.tabId,args:clone(spec.args)});return [{result:{ok:true,status:200,downloadUrl:'https://chatgpt.com/backend-api/estuary/content?id=resolved',fileName:'resolved.txt',mimeType:'text/plain'}}];}counters.injections.push(spec.target.tabId);const page=pages.get(spec.target.tabId);if(page){page.version=VERSION;page.revision=CONTENT_REVISION;}}},tabs:{onUpdated:event(),onRemoved:removed,
   get:async id=>{if(!tabs.has(id))throw Error('missing tab');return clone(tabs.get(id));},
   query:async({active,windowId})=>Array.from(tabs.values()).filter(tab=>(active===undefined||tab.active===active)&&(windowId===undefined||tab.windowId===windowId)).map(clone),
   create:async({url,active})=>{const id=Math.max(...tabs.keys())+1,tab={id,url,active,windowId:1,autoDiscardable:true};tabs.set(id,tab);pages.set(id,{ok:true,version:VERSION,revision:CONTENT_REVISION,composer:true,busy:false,hasDraft:false,activeTask:null,documentKey:'doc-'+id,href:url,userCount:url.includes('/c/')?1:0,detail:'fixture ready'});counters.creates.push(id);return clone(tab);},
@@ -110,9 +115,9 @@ test('sandbox file card trusts the live checkpoint after ChatGPT SPA navigation 
  const packet=h.packet(C1,'文件已生成',{eventType:'done',checkpoint:{phase:'finished',url:'https://chatgpt.com/c/'+upstream},fileSources:[{name:'server-auto.txt',mimeType:'application/octet-stream',conversation:upstream,messageId:'message-1111',sandboxPath:'/mnt/data/server-auto.txt',key:'/mnt/data/server-auto.txt'}]});const result=await h.content(packet);
  assert.equal(result.ok,true);assert.equal(h.counters.resolves.length,1);assert.equal(h.counters.uploads.length,1);assert.equal(h.tasks[0].state,'completed');
 });
-test('local file button triggers the matching ChatGPT card without focusing its work tab',async()=>{
+test('local file button triggers the matching ChatGPT card inside the minimized work window',async()=>{
  const h=harness();await h.cycle();const task=h.tasks[0],done=h.packet(C1,'已生成文件：下载 forum.zip',{eventType:'done',downloads:[{name:'forum.zip'}]});assert.equal((await h.content(done)).ok,true);
- const result=await h.web('ui-download-file',{conversationId:C1,taskId:task.id,fileName:'forum.zip'});assert.equal(result.ok,true);assert.equal(h.counters.downloads.length,1);assert.equal(h.counters.downloads[0].packet.fileName,'forum.zip');assert.equal(h.tabs.get(h.counters.downloads[0].id).active,false);
+ const result=await h.web('ui-download-file',{conversationId:C1,taskId:task.id,fileName:'forum.zip'});assert.equal(result.ok,true);assert.equal(h.counters.downloads.length,1);assert.equal(h.counters.downloads[0].packet.fileName,'forum.zip');const tab=h.tabs.get(h.counters.downloads[0].id),win=h.counters.windowCreates.find(item=>item.id===tab.windowId);assert.equal(tab.active,true);assert.equal(win.state,'minimized');assert.equal(win.focused,false);
 });
 test('browser restart invalidates persistent numerical tab IDs',async()=>{
  const options={saved:{},session:{doubaoSession:'old'},server:{}};let h=harness(options);await h.cycle();options.session={};h=harness(options);await h.boot;
@@ -155,4 +160,9 @@ test('changing account inside an already bound profile is refused',async()=>{
 });
 test('extension icon/workspace action opens independent pages instead of side panel',async()=>{
  const h=harness();await h.internal('ui-open-workspace');await h.internal('ui-open-workspace');assert.equal(h.counters.creates.length,2);for(const id of h.counters.creates)assert.equal(h.tabs.get(id).url,'http://127.0.0.1:48643/web/');
+});
+test('admin console can reveal and minimize only the paired account work window',async()=>{
+ const h=harness();await h.cycle();const tabId=h.saved.accountWorkTab.tabId,windowId=h.tabs.get(tabId).windowId;
+ assert.equal((await h.web('ui-show-work-window')).visible,true);assert.ok(h.counters.windowUpdates.some(([id,p])=>id===windowId&&p.state==='normal'&&p.focused===true));
+ assert.equal((await h.web('ui-hide-work-window')).visible,false);assert.ok(h.counters.windowUpdates.some(([id,p])=>id===windowId&&p.state==='minimized'&&p.focused===false));
 });
